@@ -9,10 +9,10 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-from utils.config import load_config
-from utils.system_metrics import SystemMonitor, get_baseline_metrics
-from utils.network_baseline import get_network_baseline
-from utils.submit import submit_result
+from insdc_benchmarking_scripts.utils.config import load_config
+from insdc_benchmarking_scripts.utils.system_metrics import SystemMonitor, get_baseline_metrics
+from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
+from insdc_benchmarking_scripts.utils.submit import submit_result
 
 
 def get_ftp_url(repository: str, dataset_id: str) -> str:

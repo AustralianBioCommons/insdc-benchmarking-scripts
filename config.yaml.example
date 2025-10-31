@@ -1,0 +1,20 @@
+# INSDC Benchmarking Configuration
+# Copy to config.yaml and customize
+
+# Your site identifier (lowercase)
+site: nci
+
+# API endpoint for submitting results
+api_endpoint: https://api.example.com/submit
+
+# Optional: API authentication token
+api_token: ""
+
+# Download directory
+download_dir: ./downloads
+
+# Cleanup downloaded files after test
+cleanup: true
+
+# Timeout in seconds
+timeout: 300

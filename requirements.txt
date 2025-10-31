@@ -1,0 +1,8 @@
+# Generated from poetry export
+# For users who don't use Poetry
+
+insdc-benchmarking-schema>=1.2.0
+requests>=2.31.0
+click>=8.1.0
+psutil>=5.9.0
+pyyaml>=6.0.0

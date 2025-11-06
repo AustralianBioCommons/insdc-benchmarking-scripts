@@ -1,123 +1,179 @@
 # Usage Guide
+TL;DR
+-----
 
-## Basic Usage
+### SRA .sra over HTTPS (ODP), auto-select mirror
+```benchmark-http --dataset DRR000001 --repository SRA --sra-mode sra_cloud --no-submit```
 
-### Run HTTP Benchmark
+### Force GCS mirror (fail if unavailable)
+```benchmark-http --dataset DRR000001 --repository SRA --sra-mode sra_cloud --mirror gcs --require-mirror --no-submit```
 
-```bash
-python scripts/benchmark_http.py \\
-  --dataset SRR12345678 \\
-  --repository ENA \\
-  --site nci
-```
+### ENA FASTQ over HTTPS
+```benchmark-http --dataset SRR000001 --repository ENA --no-submit```
 
-### Run FTP Benchmark
+### Explain URL resolution and run 3 trials
+```benchmark-http --dataset DRR000001 --repository SRA --sra-mode sra_cloud --explain --repeats 3 --no-submit```
 
-```bash
-python scripts/benchmark_ftp.py \\
-  --dataset SRR12345678 \\
-  --repository ENA \\
-  --site nci
-```
+* * * * *
 
-## Command-Line Options
+Command
+-------
 
-### Common Options (all protocols)
+The tool is installed as a console script:
 
-- `--dataset` (required): INSDC dataset ID (e.g., SRR12345678)
-- `--repository`: Repository to download from (ENA, SRA, DDBJ). Default: ENA
-- `--site`: Site identifier. Overrides config.yaml
-- `--config-file`: Path to config file. Default: config.yaml
-- `--no-submit`: Skip submitting results to API
+`benchmark-http [OPTIONS]`
 
-## Examples
+### Required
 
-### Test without submitting results
+-   `--dataset TEXT`\
+    INSDC run accession, e.g. `SRR12345678`, `ERR1234567`, `DRR000001`.
 
-```bash
-python scripts/benchmark_http.py \\
-  --dataset SRR000001 \\
-  --no-submit
-```
+### Common Options
 
-### Use custom config file
+-   `--repository [SRA|ENA|DDBJ]` *(default: SRA)*\
+    Source repository to benchmark.
 
-```bash
-python scripts/benchmark_http.py \\
-  --dataset SRR000001 \\
-  --config-file /path/to/custom-config.yaml
-```
+-   `--site TEXT` *(default: nci)*\
+    Short label for where the test is run (printed/submitted with results).
 
-### Run for different repositories
+-   `--timeout INTEGER` *(default: 20)*\
+    Resolver HTTP timeout (seconds).
 
-```bash
-# ENA
-python scripts/benchmark_http.py --dataset SRR000001 --repository ENA
+-   `--repeats INTEGER` *(default: 1)*\
+    Download the selected URL N times and print aggregates. Submission uses the **last** run.
 
-# SRA
-python scripts/benchmark_http.py --dataset SRR000001 --repository SRA
+-   `--no-submit`\
+    Run benchmark but **do not** POST results.
 
-# DDBJ
-python scripts/benchmark_http.py --dataset SRR000001 --repository DDBJ
-```
+### SRA-specific Options
 
-## Automated Benchmarking
+-   `--sra-mode [sra_cloud|fastq_via_ena]` *(default: sra_cloud)*
 
-### Using cron (Linux/macOS)
+    -   `sra_cloud`: download `.sra` objects from NCBI ODP buckets (AWS/GCS), handling both with/without ".sra" suffix.
 
-```bash
-# Edit crontab
+    -   `fastq_via_ena`: resolve FASTQ HTTPS via ENA (delegates to ENA resolver).
+
+-   `--mirror [auto|aws|gcs]` *(default: auto)*\
+    Preferred mirror for `sra_cloud`. The resolver probes candidates and may fall back.
+
+-   `--require-mirror/--no-require-mirror` *(default: no-require-mirror)*\
+    If set, **error out** when preferred mirror has no live objects.
+
+-   `--explain`\
+    Print all candidate URLs and mark which ones are LIVE. Helpful for mirror/debug.
+
+> You can also set `SRA_MIRROR=aws|gcs|auto` in the environment. Env var overrides the CLI.
+
+* * * * *
+
+Examples
+--------
+
+### SRA: ODP `.sra` (auto mirror)
+
+`benchmark-http --dataset DRR000001 --repository SRA --sra-mode sra_cloud --no-submit`
+
+### SRA: Force GCS and fail if not present
+
+`benchmark-http --dataset DRR000001\
+  --repository SRA --sra-mode sra_cloud\
+  --mirror gcs --require-mirror --no-submit`
+
+### SRA: Show resolution details and run 5 trials
+
+`benchmark-http --dataset SRR000001\
+  --repository SRA --sra-mode sra_cloud\
+  --explain --repeats 5 --no-submit`
+
+### ENA: FASTQ over HTTPS
+
+`benchmark-http --dataset SRR000001 --repository ENA --no-submit`
+
+* * * * *
+
+Output
+------
+
+-   Configuration summary (dataset, repo, site, mirror notes)
+
+-   Baselines (local write speed; ping/traceroute best-effort to chosen host)
+
+-   Per-trial:
+
+    -   Download size, duration, average Mbps
+
+    -   MD5 + SHA256 checksums
+
+    -   Avg CPU% and memory MB (lightweight sampler)
+
+-   If `--repeats > 1`: aggregate mean/median/p95
+
+-   Result JSON (schema v1.2 subset) with:
+
+    -   `timestamp` (start of first trial, ISO 8601 UTC)
+
+    -   `end_timestamp` (end of last trial)
+
+    -   `protocol`=`http`, `repository`, `dataset_id`, `duration_sec`, `file_size_bytes`,\
+        `average_speed_mbps`, `cpu_usage_percent`, `memory_usage_mb`,\
+        `checksum_md5`, `checksum_sha256`, baselines, `tool_version`, `notes`, `status`
+
+-   Submission status (unless `--no-submit`)
+
+* * * * *
+
+Automation
+----------
+
+### Cron (Linux/macOS)
+
+`# Edit crontab
 crontab -e
 
-# Add daily benchmark at 2 AM
-0 2 * * * cd /path/to/insdc-benchmarking-scripts && python scripts/benchmark_http.py --dataset SRR000001
-```
+# Daily at 02:00, no submission
+0 2 * * * benchmark-http --dataset DRR000001 --repository SRA --sra-mode sra_cloud --no-submit >> /var/log/insdc-http.log 2>&1`
 
-### Using systemd timer (Linux)
+### Batch multiple datasets
 
-See `examples/systemd/` for service and timer files.
+`#!/usr/bin/env bash
+set -euo pipefail
 
-### Batch script
+DATASETS=(DRR000001 SRR000001 ERR000001)
+for ds in "${DATASETS[@]}"; do
+  echo "Benchmarking $ds..."
+  benchmark-http --dataset "$ds" --repository SRA --sra-mode sra_cloud --repeats 3 --no-submit
+  sleep 60
+done`
 
-```bash
-#!/bin/bash
-# Run benchmarks for multiple datasets
+* * * * *
 
-DATASETS=("SRR000001" "SRR000002" "SRR000003")
+Troubleshooting
+---------------
 
-for dataset in "${DATASETS[@]}"; do
-    echo "Benchmarking $dataset..."
-    python scripts/benchmark_http.py --dataset $dataset
-    sleep 60  # Wait between tests
-done
-```
+-   **"No downloadable URLs resolved..."**
 
-## Output
+    -   For very old runs, ENA FASTQ may not exist; try `--repository SRA --sra-mode sra_cloud`.
 
-### Console Output
+    -   Use `--explain` to see candidates; try the other mirror (`--mirror aws|gcs`).
 
-The scripts provide detailed output including:
-- Configuration summary
-- Baseline measurements (I/O speed, network latency)
-- Download progress
-- Final results (speed, checksum, resource usage)
-- Submission status
+    -   If you truly require a mirror, add `--require-mirror` to force a clear failure.
 
-### Result Submission
+-   **Mirror not honored**
 
-Results are automatically submitted to the configured API endpoint in JSON format matching the INSDC benchmarking schema.
+    -   If `--mirror gcs` prints an AWS URL, the resolver likely didn't find a live GCS object and fell back.
 
-## Troubleshooting
+    -   Use `--require-mirror` to fail instead, or inspect with `--explain`.
 
-### Download fails
+-   **Slow speeds / high variance**
 
-- Check internet connectivity
-- Verify dataset ID exists
-- Try different repository (--repository option)
-- Check timeout setting in config.yaml
+    -   Use `--repeats N` and compare mean/median/p95.
 
-### Submission fails
+    -   Check the printed baselines; high latency or a long route can explain slow runs.
 
-- Verify API endpoint in config.yaml
-- Check API token if required
-- Use --no-submit to test benchmark without submission
+    -   Local disk write can dominate on very fast links---baseline shows write MB/s.
+
+-   **Submission fails**
+
+    -   Use `--no-submit` to test.
+
+    -   Verify API endpoint/token in your config (if you wired `submit_result` to use it).

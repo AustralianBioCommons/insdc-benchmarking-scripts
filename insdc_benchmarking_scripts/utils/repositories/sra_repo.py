@@ -3,45 +3,150 @@ from __future__ import annotations
 """
 Resolver for NCBI SRA endpoints.
 
-Two modes:
-1) sra_cloud: return HTTPS links to public .sra objects in the NCBI SRA Cloud buckets (AWS + GCP).
-   NOTE: This downloads .sra files (container format), not FASTQ. Suitable for repository/protocol benchmarking.
-2) fastq_via_ena: delegate to ENA resolver to obtain FASTQ HTTPS URLs (common practical choice for FASTQ over HTTP).
+INSDC prefixes:
+- SRR = NCBI, ERR = ENA, DRR = DDBJ.
+NCBI ODP mirrors partner data, so SRR/ERR/DRR all appear in ODP buckets.
 
-Why .sra for SRA? NCBI does not consistently expose FASTQ over HTTPS. Official tooling is SRA Toolkit (fasterq-dump).
+Modes:
+- sra_cloud (default): return HTTPS links to public .sra objects in ODP buckets (AWS+GCS).
+  Some runs exist WITHOUT the ".sra" extension (e.g. .../SRR000001/SRR000001).
+- fastq_via_ena: delegate to ENA for FASTQ HTTPS URLs.
+
+You can prefer a mirror with preferred_mirror: "auto" | "aws" | "gcs".
 """
 
+import contextlib
+import os
+from dataclasses import dataclass
+from typing import Literal, List, Tuple
 from urllib.parse import quote
+import urllib.request
 
 from .ena_repo import resolve_ena_fastq_urls
 
+DEFAULT_UA = "insdc-benchmarking/0.1 (+https://biocommons.org.au)"
+Mirror = Literal["auto", "aws", "gcs"]
 
-def _sra_cloud_candidates(run_accession: str) -> list[str]:
-    acc = run_accession.strip()
-    # Known public buckets (object names frequently follow this layout).
-    # These are *candidates* and may 404 for some runs; that's fine for benchmarking availability/latency.
-    return [
-        # AWS ODP
-        f"https://sra-pub-run-odp.s3.amazonaws.com/sra/{quote(acc)}/{quote(acc)}.sra",
-        # Older AWS path
-        f"https://sra-pub-run-odp.s3.amazonaws.com/sra/{quote(acc)}/{quote(acc)}",
-        # GCP ODP (via Google storage gateway)
-        f"https://storage.googleapis.com/sra-pub-run-odp/sra/{quote(acc)}/{quote(acc)}.sra",
+
+@dataclass
+class Resolution:
+    run_accession: str
+    mode: str
+    preferred_mirror: Mirror
+    candidates: List[str]
+    live: List[str]
+    note: str = ""
+
+
+def _candidates_for(acc: str, mirror: Mirror) -> list[str]:
+    """Build candidate URLs in a preferred order for given mirror."""
+    q = quote
+    aws = [
+        f"https://sra-pub-run-odp.s3.amazonaws.com/sra/{q(acc)}/{q(acc)}",
+        f"https://sra-pub-run-odp.s3.amazonaws.com/sra/{q(acc)}/{q(acc)}.sra",
     ]
+    gcs = [
+        f"https://storage.googleapis.com/sra-pub-run-odp/sra/{q(acc)}/{q(acc)}",
+        f"https://storage.googleapis.com/sra-pub-run-odp/sra/{q(acc)}/{q(acc)}.sra",
+    ]
+    if mirror == "aws":
+        return aws + gcs
+    if mirror == "gcs":
+        return gcs + aws
+    return aws + gcs  # auto
+
+
+def _url_exists(url: str, timeout: int = 10) -> bool:
+    """HEAD probe; on failure, try a 1-byte Range GET."""
+    head = urllib.request.Request(url, method="HEAD", headers={"User-Agent": DEFAULT_UA})
+    try:
+        with contextlib.closing(urllib.request.urlopen(head, timeout=timeout)) as r:
+            return 200 <= getattr(r, "status", 200) < 400
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404):
+            return False
+    except Exception:
+        pass
+    get1 = urllib.request.Request(
+        url, method="GET", headers={"Range": "bytes=0-0", "User-Agent": DEFAULT_UA}
+    )
+    try:
+        with contextlib.closing(urllib.request.urlopen(get1, timeout=timeout)) as r:
+            return 200 <= getattr(r, "status", 200) < 400
+    except Exception:
+        return False
 
 
 def resolve_sra_urls(
     run_accession: str,
     *,
-    mode: str = "sra_cloud",  # or "fastq_via_ena"
+    mode: str = "sra_cloud",               # or "fastq_via_ena"
+    preferred_mirror: Mirror = "auto",     # "auto" | "aws" | "gcs"
     timeout: int = 20,
 ) -> list[str]:
     """
-    Resolve URLs for SRA repository benchmarking.
+    Back-compat: return only the URL list (no explanation).
+    """
+    urls, _res = resolve_sra_urls_ex(
+        run_accession,
+        mode=mode,
+        preferred_mirror=preferred_mirror,
+        timeout=timeout,
+    )
+    return urls
 
-    :param mode: "sra_cloud" (default) -> .sra objects via cloud buckets
-                 "fastq_via_ena"      -> FASTQ via ENA resolver (if you want FASTQ specifically)
+
+def resolve_sra_urls_ex(
+    run_accession: str,
+    *,
+    mode: str = "sra_cloud",
+    preferred_mirror: Mirror = "auto",
+    timeout: int = 20,
+) -> Tuple[List[str], Resolution]:
+    """
+    Resolve URLs for SRA repository benchmarking and return an explanation.
+
+    :return: (urls, Resolution)
     """
     if mode == "fastq_via_ena":
-        return resolve_ena_fastq_urls(run_accession, timeout=timeout)
-    return _sra_cloud_candidates(run_accession)
+        urls = resolve_ena_fastq_urls(run_accession, timeout=timeout)
+        res = Resolution(
+            run_accession=run_accession,
+            mode=mode,
+            preferred_mirror="auto",
+            candidates=[],
+            live=urls[:],
+            note="Delegated to ENA for FASTQ.",
+        )
+        return urls, res
+
+    acc = run_accession.strip()
+    env_pref = os.getenv("SRA_MIRROR", "").strip().lower()
+    if env_pref in ("aws", "gcs", "auto"):
+        preferred_mirror = env_pref  # env wins if set
+
+    candidates = _candidates_for(acc, preferred_mirror)
+    live = [u for u in candidates if _url_exists(u, timeout=timeout)]
+
+    note = ""
+    if preferred_mirror in ("aws", "gcs"):
+        # Determine if *preferred* group had any lives; if not, explain fallback.
+        group = "aws" if preferred_mirror == "aws" else "gcs"
+        group_prefix = "https://sra-pub-run-odp.s3.amazonaws.com" if group == "aws" \
+            else "https://storage.googleapis.com"
+        had_preferred = any(u.startswith(group_prefix) for u in live)
+        if not had_preferred:
+            note = f"No live objects on preferred mirror '{preferred_mirror}', falling back."
+
+    res = Resolution(
+        run_accession=acc,
+        mode="sra_cloud",
+        preferred_mirror=preferred_mirror,
+        candidates=candidates,
+        live=live[:],
+        note=note,
+    )
+    return (live or candidates), res
+
+
+__all__ = ["resolve_sra_urls", "resolve_sra_urls_ex"]

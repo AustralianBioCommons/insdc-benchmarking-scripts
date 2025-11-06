@@ -1,7 +1,7 @@
 """Tests for network baseline module"""
 
 import pytest
-from scripts.utils.network_baseline import measure_latency, get_network_baseline
+from insdc_benchmarking_scripts.utils.network_baseline import measure_latency, get_network_baseline
 
 
 def test_measure_latency_valid_host():

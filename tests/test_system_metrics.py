@@ -2,7 +2,7 @@
 
 import pytest
 import time
-from scripts.utils.system_metrics import SystemMonitor, get_baseline_metrics
+from insdc_benchmarking_scripts.utils.system_metrics import SystemMonitor, get_baseline_metrics
 
 
 def test_system_monitor_initialization():
@@ -70,4 +70,3 @@ def test_get_baseline_metrics():
     assert 'write_speed_mbps' in baseline
     # write_speed_mbps can be None if test fails, but should exist
     assert baseline['write_speed_mbps'] is None or isinstance(baseline['write_speed_mbps'], float)
-

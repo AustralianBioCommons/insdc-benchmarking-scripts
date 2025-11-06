@@ -5,6 +5,11 @@ description = "Benchmarking scripts for INSDC data transfers"
 authors = ["Australian BioCommons <guerdon@biocommons.org.au>"]
 readme = "README.md"
 license = "Apache-2.0"
+packages = [{include = "insdc_benchmarking_scripts"}]
+
+[tool.poetry.scripts]
+benchmark-http = "insdc_benchmarking_scripts.scripts.benchmark_http:main"
+benchmark-ftp = "insdc_benchmarking_scripts.scripts.benchmark_ftp:main"
 
 [tool.poetry.dependencies]
 python = "^3.9"

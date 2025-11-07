@@ -10,7 +10,7 @@ Highlights
 - Native Python FTP implementation (no external dependencies)
 - ENA FTP support with automatic URL resolution
 - System metrics (CPU %, memory MB) and local write-speed baseline
-- Network baseline (ping/traceroute) targeting the FTP host
+- Network baseline (ping / traceroute) targeting the FTP host
 - Produces JSON-compatible result matching v1.2 schema
 - Optional --repeats for multiple trials with aggregate statistics
 """

@@ -1,4 +1,32 @@
-# insdc_benchmarking_scripts/scripts/benchmark_http.py
+from __future__ import annotations
+
+import json
+import os
+import socket
+import statistics
+import subprocess
+import time
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Literal, cast
+from urllib.parse import urlparse
+
+import click
+
+# ---- Optional utils  ----
+from insdc_benchmarking_scripts.utils.system_metrics import (
+    SystemMonitor,
+    get_baseline_metrics,
+)
+from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
+from insdc_benchmarking_scripts.utils.submit import submit_result
+
+# ---- Resolvers (SRA with mirror control + ENA FASTQ) ----
+from insdc_benchmarking_scripts.utils.repositories import (
+    resolve_ena_fastq_urls,
+    resolve_sra_urls_ex,  # returns (urls, Resolution) with candidates/live/note
+    # resolve_ddbj_fastq_urls,  # Wire-in when you add this
+)
+
 """HTTP/HTTPS benchmarking using wget.
 
 This CLI resolves one or more downloadable URLs for an INSDC run accession
@@ -17,44 +45,17 @@ Highlights
   precise `timestamp` (start of first trial) and `end_timestamp` (end of last trial)
 """
 
-from __future__ import annotations
-
-import json
-import socket
-import statistics
-import subprocess
-import time
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from urllib.parse import urlparse
-
-import click
-
-# ---- Optional utils  ----
-from insdc_benchmarking_scripts.utils.config import load_config  # kept for future wiring
-from insdc_benchmarking_scripts.utils.system_metrics import (
-    SystemMonitor,
-    get_baseline_metrics,
-)
-from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
-from insdc_benchmarking_scripts.utils.submit import submit_result
-
-# ---- Resolvers (SRA with mirror control + ENA FASTQ) ----
-from insdc_benchmarking_scripts.utils.repositories import (
-    resolve_ena_fastq_urls,
-    resolve_sra_urls_ex,  # returns (urls, Resolution) with candidates/live/note
-    # resolve_ddbj_fastq_urls,  # Wire-in when you add this
-)
-
-
 # --------------------------- Helpers ---------------------------
+
 
 def _wget(output_path: Path, url: str) -> None:
     """Run wget to download a single URL to a given path."""
     cmd = ["wget", "-O", str(output_path), url]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise SystemExit(f"wget failed with code {result.returncode}: {result.stderr or result.stdout}")
+        raise SystemExit(
+            f"wget failed with code {result.returncode}: {result.stderr or result.stdout}"
+        )
 
 
 def _md5(path: Path) -> str:
@@ -70,6 +71,7 @@ def _md5(path: Path) -> str:
 def _sha256(path: Path) -> str:
     """Compute SHA256 checksum using Python stdlib to avoid external deps."""
     import hashlib
+
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -80,7 +82,11 @@ def _sha256(path: Path) -> str:
 def _wget_version() -> Optional[str]:
     """Return the first line of `wget --version`, or None if not found."""
     try:
-        out = subprocess.check_output(["wget", "--version"]).decode("utf-8", "ignore").splitlines()
+        out = (
+            subprocess.check_output(["wget", "--version"])
+            .decode("utf-8", "ignore")
+            .splitlines()
+        )
         return out[0].strip() if out else None
     except Exception:
         return None
@@ -115,6 +121,7 @@ def _iso8601(ts_seconds: float) -> str:
 
 # ----------------------------- CLI -----------------------------
 
+
 @click.command()
 @click.option(
     "--dataset",
@@ -123,7 +130,9 @@ def _iso8601(ts_seconds: float) -> str:
 )
 @click.option(
     "--repository",
-    type=click.Choice(["SRA", "ENA, DDBJ".split(", ")[0], "DDBJ"], case_sensitive=False),
+    type=click.Choice(
+        ["SRA", "ENA, DDBJ".split(", ")[0], "DDBJ"], case_sensitive=False
+    ),
     default="SRA",
     show_default=True,
     help="Source repository to benchmark.",
@@ -208,13 +217,13 @@ def main(
 
     # --- Resolve URLs based on repository/mode ---
     if repository == "SRA":
+        # Narrow runtime string from Click into a Literal for type-checkers
+        m_lower = mirror.lower()
+        assert m_lower in {"auto", "aws", "gcs"}, "--mirror must be one of auto/aws/gcs"
+        mirror_lit = cast(Literal["auto", "aws", "gcs"], m_lower)
         urls, res = resolve_sra_urls_ex(
-            dataset, mode=sra_mode, preferred_mirror=mirror, timeout=timeout
+            dataset, mode=sra_mode, preferred_mirror=mirror_lit, timeout=timeout
         )
-        if not urls:
-            raise SystemExit(
-                f"❌ No downloadable URLs resolved for {dataset} via {repository} ({sra_mode})."
-            )
 
         print(f"   Resolved {len(urls)} file(s):")
         for u in urls[:3]:
@@ -238,7 +247,8 @@ def main(
             wants_aws = mirror.lower() == "aws"
             wants_gcs = mirror.lower() == "gcs"
             if wants_aws and not any(
-                u.startswith("https://sra-pub-run-odp.s3.amazonaws.com") for u in res.live
+                u.startswith("https://sra-pub-run-odp.s3.amazonaws.com")
+                for u in res.live
             ):
                 raise SystemExit("❌ --require-mirror=aws but no live objects on AWS.")
             if wants_gcs and not any(
@@ -273,11 +283,15 @@ def main(
 
     # --- Optional baselines: local write and network (best-effort) ---
     baseline_local = get_baseline_metrics()  # {"write_speed_mbps": float|None}
-    baseline_net = get_network_baseline(host=target_host) if target_host else {
-        "network_latency_ms": None,
-        "network_path": None,
-        "packet_loss_percent": None,
-    }
+    baseline_net = (
+        get_network_baseline(host=target_host)
+        if target_host
+        else {
+            "network_latency_ms": None,
+            "network_path": None,
+            "packet_loss_percent": None,
+        }
+    )
 
     sizes: List[int] = []
     durations: List[float] = []
@@ -340,7 +354,7 @@ def main(
 
         # Print per-trial summary
         print("\n✅ Download Complete!" if size_bytes > 0 else "\n❌ Download Failed!")
-        print(f"   Files: 1")
+        print("   Files: 1")
         print(f"   Total size: {size_bytes / (1024 * 1024):.2f} MB")
         print(f"   Duration: {duration:.2f} seconds")
         print(f"   Average speed: {avg_mbps:.2f} Mbps")
@@ -386,11 +400,16 @@ def main(
     start_iso = _iso8601(start_ts or time.time())
     end_iso = _iso8601(end_ts or time.time())
 
+    net_latency = baseline_net.get("network_latency_ms")
+    net_path_raw = baseline_net.get("network_path")
+    net_path = net_path_raw.splitlines() if isinstance(net_path_raw, str) else None
+    packet_loss = baseline_net.get("packet_loss_percent")
+
     result: Dict[str, Any] = {
-        "timestamp": start_iso,           # REQUIRED by schema
-        "end_timestamp": end_iso,         # OPTIONAL in schema v1.2
+        "timestamp": start_iso,  # REQUIRED by schema
+        "end_timestamp": end_iso,  # OPTIONAL in schema v1.2
         "site": site,
-        "protocol": "http",               # This CLI specifically benchmarks HTTP/HTTPS via wget
+        "protocol": "http",  # This CLI specifically benchmarks HTTP/HTTPS via wget
         "repository": repository,
         "dataset_id": dataset,
         "duration_sec": round(last_duration, 2),
@@ -401,14 +420,11 @@ def main(
         "status": "success" if last_size > 0 and md5_last else "fail",
         "checksum_md5": md5_last or "",
         "checksum_sha256": sha256_last or "",
-        "write_speed_mbps": get_baseline_metrics().get("write_speed_mbps"),
-        "network_latency_ms": (get_network_baseline(host=target_host) or {}).get("network_latency_ms")
-                              if target_host else None,
-        "packet_loss_percent": None,  # not directly measured by current baseline helper
+        "write_speed_mbps": baseline_local.get("write_speed_mbps"),
+        "network_latency_ms": net_latency,
+        "packet_loss_percent": packet_loss,
         # Flatten traceroute output as an array of lines (if present)
-        "network_path": (get_network_baseline(host=target_host) or {}).get("network_path").splitlines()
-                         if target_host and (get_network_baseline(host=target_host) or {}).get("network_path")
-                         else None,
+        "network_path": net_path,
         "tool_version": _wget_version() or "wget",
         "notes": note or None,
         "error_message": None,
@@ -423,8 +439,12 @@ def main(
         print("\n⏭️  Skipping submission (--no-submit)")
     else:
         try:
-            submit_result(result)  # should raise on failure
-            print("\n📤 Submitted result successfully.")
+            endpoint = os.getenv("BENCHMARK_SUBMIT_URL")
+            if not endpoint:
+                print("⚠️  BENCHMARK_SUBMIT_URL not set; skipping submission.")
+            else:
+                submit_result(endpoint, result)  # (url: str, payload: dict[str, Any])
+                print("\n📤 Submitted result successfully.")
         except Exception as e:
             print(f"\n⚠️  Submission error: {e}")
 

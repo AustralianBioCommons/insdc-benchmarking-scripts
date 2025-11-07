@@ -18,6 +18,7 @@ Highlights
 from __future__ import annotations
 
 import json
+import os
 import statistics
 import time
 from ftplib import FTP
@@ -27,7 +28,6 @@ from urllib.parse import urlparse
 
 import click
 
-from insdc_benchmarking_scripts.utils.config import load_config
 from insdc_benchmarking_scripts.utils.system_metrics import (
     SystemMonitor,
     get_baseline_metrics,
@@ -39,9 +39,11 @@ from insdc_benchmarking_scripts.utils.repositories import resolve_ena_fastq_urls
 
 # --------------------------- Helpers ---------------------------
 
+
 def _md5(path: Path) -> str:
     """Compute MD5 checksum using Python stdlib."""
     import hashlib
+
     h = hashlib.md5()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -52,6 +54,7 @@ def _md5(path: Path) -> str:
 def _sha256(path: Path) -> str:
     """Compute SHA256 checksum using Python stdlib."""
     import hashlib
+
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -99,23 +102,26 @@ def _ftp_download(ftp_url: str, output_path: Path, timeout: int = 30) -> None:
 
     try:
         try:
-            with open(output_path, 'wb') as f:
-                ftp.retrbinary(f'RETR {path}', f.write)
+            with open(output_path, "wb") as f:
+                ftp.retrbinary(f"RETR {path}", f.write)
         except Exception:
             # Fallback: try cwd then RETR basename
             from posixpath import dirname, basename
+
             dirpart, filepart = dirname(path), basename(path)
             if dirpart:
                 ftp.cwd(dirpart)
-            with open(output_path, 'wb') as f:
-                ftp.retrbinary(f'RETR {path}', f.write)
+            with open(output_path, "wb") as f:
+                ftp.retrbinary(f"RETR {filepart}", f.write)
     finally:
         try:
             ftp.quit()
         except Exception:
             pass
 
+
 # ----------------------------- CLI -----------------------------
+
 
 @click.command()
 @click.option(
@@ -163,13 +169,13 @@ def _ftp_download(ftp_url: str, output_path: Path, timeout: int = 30) -> None:
     help="Perform benchmark but skip submission step (printing only).",
 )
 def main(
-        dataset: str,
-        repository: str,
-        site: str,
-        repeats: int,
-        timeout: int,
-        ftp_timeout: int,
-        no_submit: bool,
+    dataset: str,
+    repository: str,
+    site: str,
+    repeats: int,
+    timeout: int,
+    ftp_timeout: int,
+    no_submit: bool,
 ) -> None:
     """Resolve FTP URL(s), download first, time transfer, sample metrics, and print/submit results."""
     print("\n" + "=" * 70)
@@ -202,7 +208,9 @@ def main(
             print(f"     - (+{len(urls) - 3} more)")
 
     elif repository == "SRA":
-        raise SystemExit("❌ SRA FTP resolver not implemented yet. Use --repository ENA")
+        raise SystemExit(
+            "❌ SRA FTP resolver not implemented yet. Use --repository ENA"
+        )
 
     elif repository == "DDBJ":
         raise SystemExit("❌ DDBJ FTP resolver not implemented yet.")
@@ -222,11 +230,15 @@ def main(
 
     # --- Optional baselines: local write and network (best-effort) ---
     baseline_local = get_baseline_metrics()  # {"write_speed_mbps": float|None}
-    baseline_net = get_network_baseline(host=target_host) if target_host else {
-        "network_latency_ms": None,
-        "network_path": None,
-        "packet_loss_percent": None,
-    }
+    baseline_net = (
+        get_network_baseline(host=target_host)
+        if target_host
+        else {
+            "network_latency_ms": None,
+            "network_path": None,
+            "packet_loss_percent": None,
+        }
+    )
 
     sizes: List[int] = []
     durations: List[float] = []
@@ -290,7 +302,7 @@ def main(
 
         # Print per-trial summary
         print("\n✅ Download Complete!" if size_bytes > 0 else "\n❌ Download Failed!")
-        print(f"   Files: 1")
+        print("   Files: 1")
         print(f"   Total size: {size_bytes / (1024 * 1024):.2f} MB")
         print(f"   Duration: {duration:.2f} seconds")
         print(f"   Average speed: {avg_mbps:.2f} Mbps")
@@ -350,8 +362,9 @@ def main(
         "write_speed_mbps": baseline_local.get("write_speed_mbps"),
         "network_latency_ms": baseline_net.get("network_latency_ms"),
         "packet_loss_percent": baseline_net.get("packet_loss_percent"),
-        "network_path": (baseline_net.get("network_path") or "").splitlines() if baseline_net.get(
-            "network_path") else None,
+        "network_path": (baseline_net.get("network_path") or "").splitlines()
+        if baseline_net.get("network_path")
+        else None,
         "tool_version": "Python ftplib",
         "notes": None,
         "error_message": None,
@@ -366,8 +379,13 @@ def main(
         print("\n⏭️  Skipping submission (--no-submit)")
     else:
         try:
-            submit_result(result)
-            print("\n📤 Submitted result successfully.")
+            endpoint = os.getenv("BENCHMARK_SUBMIT_URL")
+            if not endpoint:
+                print("⚠️  BENCHMARK_SUBMIT_URL not set; skipping submission.")
+            else:
+                submit_result(endpoint, result)  # (url: str, payload: dict[str, Any])
+                print("\n📤 Submitted result successfully.")
+
         except Exception as e:
             print(f"\n⚠️  Submission error: {e}")
 

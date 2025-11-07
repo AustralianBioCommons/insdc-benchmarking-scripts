@@ -1,15 +1,13 @@
 # insdc_benchmarking_scripts/utils/repositories/ena_repo.py
 from __future__ import annotations
+import csv
+import io
+import urllib.parse
+import requests
 
 """
 Resolver for ENA FASTQ HTTPS URLs using the ENA Filereport API.
 """
-
-import csv
-import io
-import urllib.parse
-
-import requests
 
 
 def resolve_ena_fastq_urls(run_accession: str, timeout: int = 20) -> list[str]:
@@ -40,6 +38,7 @@ def resolve_ena_fastq_urls(run_accession: str, timeout: int = 20) -> list[str]:
 
     # Debug output
     import sys
+
     print(f"\n🔍 DEBUG: ENA API Response for {acc}:", file=sys.stderr)
     print(f"{'=' * 60}", file=sys.stderr)
     print(tsv, file=sys.stderr)

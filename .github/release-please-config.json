@@ -1,0 +1,17 @@
+{
+  "bootstrap-sha": "",
+  "release-type": "python",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "package-name": "insdc-benchmarking-scripts",
+      "changelog-path": "CHANGELOG.md"
+    }
+  },
+  "plugins": [
+    { "type": "linked-versions", "groupName": "root" }
+  ],
+  "pull-request-title-pattern": "chore: release ${version}",
+  "separate-pull-requests": false
+}

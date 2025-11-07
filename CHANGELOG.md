@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/compare/insdc-benchmarking-scripts-v0.1.2...insdc-benchmarking-scripts-v0.1.3) (2025-11-07)
+
+
+### Bug Fixes
+
+* fix workflows ([dc44332](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/commit/dc44332a088f152a6e2ba7a6e6e349211a2107ad))
+* trigger patch release ([e69823c](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/commit/e69823ce117a62e6dd8228a84277d0223b4b7463))
+
 ## [0.1.2](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/compare/insdc-benchmarking-scripts-v0.1.1...insdc-benchmarking-scripts-v0.1.2) (2025-11-07)
 
 

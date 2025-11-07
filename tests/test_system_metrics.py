@@ -1,8 +1,10 @@
 """Tests for system metrics module"""
 
-import pytest
 import time
-from insdc_benchmarking_scripts.utils.system_metrics import SystemMonitor, get_baseline_metrics
+from insdc_benchmarking_scripts.utils.system_metrics import (
+    SystemMonitor,
+    get_baseline_metrics,
+)
 
 
 def test_system_monitor_initialization():
@@ -48,10 +50,10 @@ def test_system_monitor_averages():
 
     averages = monitor.get_averages()
 
-    assert 'cpu_usage_percent' in averages
-    assert 'memory_usage_mb' in averages
-    assert isinstance(averages['cpu_usage_percent'], float)
-    assert isinstance(averages['memory_usage_mb'], float)
+    assert "cpu_usage_percent" in averages
+    assert "memory_usage_mb" in averages
+    assert isinstance(averages["cpu_usage_percent"], float)
+    assert isinstance(averages["memory_usage_mb"], float)
 
 
 def test_system_monitor_empty_averages():
@@ -59,14 +61,16 @@ def test_system_monitor_empty_averages():
     monitor = SystemMonitor()
     averages = monitor.get_averages()
 
-    assert averages['cpu_usage_percent'] == 0
-    assert averages['memory_usage_mb'] == 0
+    assert averages["cpu_usage_percent"] == 0
+    assert averages["memory_usage_mb"] == 0
 
 
 def test_get_baseline_metrics():
     """Test getting baseline metrics"""
     baseline = get_baseline_metrics()
 
-    assert 'write_speed_mbps' in baseline
+    assert "write_speed_mbps" in baseline
     # write_speed_mbps can be None if test fails, but should exist
-    assert baseline['write_speed_mbps'] is None or isinstance(baseline['write_speed_mbps'], float)
+    assert baseline["write_speed_mbps"] is None or isinstance(
+        baseline["write_speed_mbps"], float
+    )

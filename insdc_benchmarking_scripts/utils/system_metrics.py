@@ -2,14 +2,18 @@
 System metrics sampler for benchmarking.
 Attempts to use `psutil` if available; otherwise provides safe fallbacks.
 """
+
 from __future__ import annotations
-import os, time, tempfile
+import os
+import time
+import tempfile
 from typing import List, Dict, Any, Optional
 
 try:
     import psutil  # type: ignore
 except Exception:
     psutil = None  # type: ignore
+
 
 class SystemMonitor:
     def __init__(self, interval: float = 0.5):
@@ -44,13 +48,20 @@ class SystemMonitor:
 
     def get_averages(self) -> Dict[str, float]:
         cpu = sum(self.cpu_samples) / len(self.cpu_samples) if self.cpu_samples else 0.0
-        mem = sum(self.memory_samples) / len(self.memory_samples) if self.memory_samples else 0.0
+        mem = (
+            sum(self.memory_samples) / len(self.memory_samples)
+            if self.memory_samples
+            else 0.0
+        )
         return {
             "cpu_usage_percent": round(cpu, 2),
             "memory_usage_mb": round(mem, 2),
         }
 
-def _test_write_speed(tmp_dir: str = None, size_mb: int = 100) -> Optional[float]:
+
+def _test_write_speed(
+    tmp_dir: Optional[str] = None, size_mb: int = 100
+) -> Optional[float]:
     """Rough write speed test; returns MB/s or None on failure."""
     try:
         tmp_dir = tmp_dir or tempfile.gettempdir()
@@ -68,9 +79,12 @@ def _test_write_speed(tmp_dir: str = None, size_mb: int = 100) -> Optional[float
         elapsed = end - start
         if elapsed <= 0:
             return None
-        return round(size_mb / elapsed, 2)
+        mb_per_s = size_mb / elapsed
+        # Convert MB/s -> Mbps (decimal-ish; close enough for baseline)
+        return round(mb_per_s * 8, 2)
     except Exception:
         return None
+
 
 def get_baseline_metrics() -> Dict[str, Any]:
     return {

@@ -1,5 +1,10 @@
 # insdc_benchmarking_scripts/utils/repositories/ddbj_repo.py
 from __future__ import annotations
+import re
+import urllib.request
+from html import unescape
+from .ena_repo import resolve_ena_fastq_urls  # used only when mirror_from_ena=True
+
 """
 Resolver for DDBJ FASTQ HTTPS URLs.
 
@@ -10,17 +15,13 @@ Two modes:
 If you are benchmarking repositories independently, prefer `native=True`.
 """
 
-import re
-import urllib.request
-from html import unescape
-
-from .ena_repo import resolve_ena_fastq_urls  # used only when mirror_from_ena=True
-
 
 def _ddbj_dir_url(accession: str) -> str:
     # DDBJ mirrors ENA's /vol1/fastq layout under a different root.
     parent = accession[:6]
-    return f"https://ddbj.nig.ac.jp/public/ddbj_database/dra/fastq/{parent}/{accession}/"
+    return (
+        f"https://ddbj.nig.ac.jp/public/ddbj_database/dra/fastq/{parent}/{accession}/"
+    )
 
 
 def _fetch(url: str, timeout: int = 20) -> str:
@@ -32,7 +33,7 @@ def _extract_fastq_links(html: str) -> list[str]:
     # Very lightweight parser for directory index pages
     # Match href="FILENAME.fastq.gz" or >FILENAME.fastq.gz<
     html = unescape(html)
-    pattern = r'>([^<]+\.fastq\.gz)<'
+    pattern = r">([^<]+\.fastq\.gz)<"
     return sorted(set(re.findall(pattern, html)))
 
 
@@ -71,8 +72,10 @@ def resolve_ddbj_fastq_urls(
                 i = u.find(needle)
                 if i == -1:
                     continue
-                tail = u[i + len(needle):]
-                mapped.append("https://ddbj.nig.ac.jp/public/ddbj_database/dra/fastq/" + tail)
+                tail = u[i + len(needle) :]
+                mapped.append(
+                    "https://ddbj.nig.ac.jp/public/ddbj_database/dra/fastq/" + tail
+                )
             return mapped
         except Exception:
             return []

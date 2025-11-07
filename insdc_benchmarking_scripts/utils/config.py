@@ -1,6 +1,7 @@
 """
 Configuration loader for INSDC benchmarking scripts.
 """
+
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any
@@ -14,10 +15,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "timeout": 300,
 }
 
+
 def _merge_defaults(user_cfg: Dict[str, Any]) -> Dict[str, Any]:
     merged = DEFAULT_CONFIG.copy()
     merged.update(user_cfg or {})
     return merged
+
 
 def load_config(config_path: str | Path | None = None) -> Dict[str, Any]:
     """

@@ -1,19 +1,27 @@
+from __future__ import annotations
+import shlex
+import subprocess
+from typing import Dict, Any, Optional
+
 """
 Network baseline measurements.
 Uses system tools if present; safe fallbacks otherwise.
 """
-from __future__ import annotations
-import subprocess, shlex
-from typing import Dict, Any, Optional
+
 
 def _run(cmd: str, timeout: int = 5) -> str:
     try:
-        out = subprocess.check_output(shlex.split(cmd), stderr=subprocess.STDOUT, timeout=timeout)
+        out = subprocess.check_output(
+            shlex.split(cmd), stderr=subprocess.STDOUT, timeout=timeout
+        )
         return out.decode("utf-8", "ignore")
-    except Exception as e:
+    except Exception:
         return ""
 
-def measure_latency(host: str = "8.8.8.8", count: int = 3, timeout: int = 5) -> Optional[float]:
+
+def measure_latency(
+    host: str = "8.8.8.8", count: int = 3, timeout: int = 5
+) -> Optional[float]:
     """
     Returns average latency in ms using `ping`. Returns None if not available.
     """
@@ -31,6 +39,7 @@ def measure_latency(host: str = "8.8.8.8", count: int = 3, timeout: int = 5) -> 
                 except Exception:
                     return None
     return None
+
 
 def get_network_baseline(host: str = "8.8.8.8") -> Dict[str, Any]:
     lat = measure_latency(host)

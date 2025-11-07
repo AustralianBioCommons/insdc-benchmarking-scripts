@@ -1,8 +1,6 @@
 """Tests for configuration module"""
 
-import pytest
-from pathlib import Path
-from scripts.utils.config import load_config, DEFAULT_CONFIG
+from insdc_benchmarking_scripts.utils.config import load_config, DEFAULT_CONFIG
 
 
 def test_load_default_config(tmp_path):
@@ -11,7 +9,7 @@ def test_load_default_config(tmp_path):
     config = load_config(config_path)
 
     assert config == DEFAULT_CONFIG
-    assert config['site'] == 'nci'
+    assert config["site"] == "nci"
 
 
 def test_load_custom_config(tmp_path):
@@ -25,11 +23,11 @@ def test_load_custom_config(tmp_path):
 
     config = load_config(config_path)
 
-    assert config['site'] == 'pawsey'
-    assert config['api_endpoint'] == 'https://custom.api.com/submit'
-    assert config['timeout'] == 600
+    assert config["site"] == "pawsey"
+    assert config["api_endpoint"] == "https://custom.api.com/submit"
+    assert config["timeout"] == 600
     # Should merge with defaults
-    assert config['cleanup'] == True  # From default
+    assert config["cleanup"]  # From default
 
 
 def test_config_merge_with_defaults(tmp_path):
@@ -40,8 +38,8 @@ def test_config_merge_with_defaults(tmp_path):
     config = load_config(config_path)
 
     # Custom value
-    assert config['site'] == 'test_site'
+    assert config["site"] == "test_site"
     # Default values
-    assert 'download_dir' in config
-    assert 'cleanup' in config
-    assert 'timeout' in config
+    assert "download_dir" in config
+    assert "cleanup" in config
+    assert "timeout" in config

@@ -22,36 +22,3 @@ jobs:
         with:
           config-file: .github/release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      # Checkout code only if a release was created
-      - name: Checkout code
-        if: ${{ steps.release.outputs.release_created }}
-        uses: actions/checkout@v4
-
-      # Set up Python only if a release was created
-      - name: Set up Python
-        if: ${{ steps.release.outputs.release_created }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # Install Poetry only if a release was created
-      - name: Install Poetry
-        if: ${{ steps.release.outputs.release_created }}
-        uses: snok/install-poetry@v1
-        with:
-          version: latest
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-
-      # Build the package only if a release was created
-      - name: Build wheel/sdist
-        if: ${{ steps.release.outputs.release_created }}
-        run: poetry build
-
-      # Publish to PyPI only if a release was created
-      - name: Publish to PyPI
-        if: ${{ steps.release.outputs.release_created }}
-        uses: pypa/gh-action-pypi-publish@v1.10.3
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}

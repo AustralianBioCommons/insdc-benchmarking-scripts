@@ -10,15 +10,8 @@ Automated benchmarking tools for testing **INSDC data download performance** a
 
 ### 1\. Install
 
-```
-# With Poetry (recommended)
-poetry install
-
-# Or with pip + virtual environment
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
+```bash
+pip install insdc-benchmarking-scripts
 ```
 
 ### 2\. Configure

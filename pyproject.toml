@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "insdc-benchmarking-scripts"
-version = "0.1.6"
+version = "0.1.7"
 description = "Benchmarking scripts for INSDC data transfers"
 authors = ["Australian BioCommons <guerdon@biocommons.org.au>"]
 keywords = ["INSDC", "benchmark", "ENA", "SRA", "FTP", "HTTP"]

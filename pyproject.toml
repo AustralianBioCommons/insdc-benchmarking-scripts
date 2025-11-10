@@ -10,7 +10,7 @@ classifiers = [
   "Environment :: Console",
   "Topic :: Internet",
 ]
-readme = "README.md"
+readme = "README-pypi.md"
 license = "Apache-2.0"
 packages = [{include = "insdc_benchmarking_scripts"}]
 

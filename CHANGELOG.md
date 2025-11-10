@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/compare/insdc-benchmarking-scripts-v0.1.8...insdc-benchmarking-scripts-v0.1.9) (2025-11-10)
+
+
+### Documentation
+
+* README-pypi.md ([1ae8646](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/commit/1ae86467f4b0983d653be8dc3e10e86384ab2058))
+
 ## [0.1.8](https://github.com/AustralianBioCommons/insdc-benchmarking-scripts/compare/insdc-benchmarking-scripts-v0.1.7...insdc-benchmarking-scripts-v0.1.8) (2025-11-10)
 
 

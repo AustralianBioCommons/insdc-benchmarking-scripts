@@ -1,0 +1,9 @@
+{
+  "dataset_file": "data/deterministic_datasets_v2.csv",
+  "total_rows": 11812,
+  "active_rows": 10462,
+  "suppressed_rows": 148,
+  "not_found_rows": 1202,
+  "issues_total": 0,
+  "valid": true
+}

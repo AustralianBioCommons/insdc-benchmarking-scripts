@@ -7,24 +7,21 @@ import statistics
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Literal, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 from urllib.parse import urlparse
 
 import click
 
-# ---- Optional utils  ----
+from insdc_benchmarking_scripts.utils import load_run_record
+from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
+from insdc_benchmarking_scripts.utils.repositories import (
+    resolve_ena_fastq_urls,
+    resolve_sra_urls_ex,
+)
+from insdc_benchmarking_scripts.utils.submit import submit_result
 from insdc_benchmarking_scripts.utils.system_metrics import (
     SystemMonitor,
     get_baseline_metrics,
-)
-from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
-from insdc_benchmarking_scripts.utils.submit import submit_result
-
-# ---- Resolvers (SRA with mirror control + ENA FASTQ) ----
-from insdc_benchmarking_scripts.utils.repositories import (
-    resolve_ena_fastq_urls,
-    resolve_sra_urls_ex,  # returns (urls, Resolution) with candidates/live/note
-    # resolve_ddbj_fastq_urls,  # Wire-in when you add this
 )
 
 """HTTP/HTTPS benchmarking using wget.
@@ -32,20 +29,7 @@ from insdc_benchmarking_scripts.utils.repositories import (
 This CLI resolves one or more downloadable URLs for an INSDC run accession
 (SRR/ERR/DRR), downloads the first one with `wget`, times the transfer,
 computes checksums, samples system/network baselines, and prints stats.
-
-Highlights
-----------
-- SRA "cloud" mode (AWS/GCS ODP buckets for .sra objects, with/without ".sra")
-- ENA FASTQ mode (HTTPS URLs from ENA filereport)
-- Mirror control: --mirror {auto,aws,gcs}, --require-mirror, and --explain
-- Optional --repeats for multiple trials (aggregates printed; submission uses last)
-- Integrates lightweight system metrics (CPU %, memory MB) and local write-speed
-- Integrates a simple network baseline (ping/traceroute) targeting the source host
-- Produces a JSON-compatible result that matches your v1.2 schema, including
-  precise `timestamp` (start of first trial) and `end_timestamp` (end of last trial)
 """
-
-# --------------------------- Helpers ---------------------------
 
 
 def _wget(output_path: Path, url: str) -> None:
@@ -59,7 +43,7 @@ def _wget(output_path: Path, url: str) -> None:
 
 
 def _md5(path: Path) -> str:
-    """Compute an MD5 checksum in a cross-platform way (macOS `md5`, Linux `md5sum`)."""
+    """Compute an MD5 checksum in a cross-platform way."""
     try:
         out = subprocess.check_output(["md5", str(path)]).decode().strip()
         return out.split(" = ")[-1]
@@ -69,7 +53,7 @@ def _md5(path: Path) -> str:
 
 
 def _sha256(path: Path) -> str:
-    """Compute SHA256 checksum using Python stdlib to avoid external deps."""
+    """Compute SHA256 checksum using Python stdlib."""
     import hashlib
 
     h = hashlib.sha256()
@@ -93,10 +77,9 @@ def _wget_version() -> Optional[str]:
 
 
 def _host_for_latency_from_url(url: str) -> Optional[str]:
-    """Extract the hostname to target for network baseline (ping/traceroute)."""
+    """Extract the hostname to target for network baseline."""
     try:
         host = urlparse(url).hostname
-        # Best-effort DNS resolve to validate host
         if host:
             try:
                 socket.gethostbyname(host)
@@ -115,11 +98,8 @@ def _pretty_mbps(bytes_count: int, seconds: float) -> float:
 
 
 def _iso8601(ts_seconds: float) -> str:
-    """Format a UNIX timestamp (seconds) as an ISO 8601 UTC string with Z suffix."""
+    """Format a UNIX timestamp as an ISO 8601 UTC string."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts_seconds))
-
-
-# ----------------------------- CLI -----------------------------
 
 
 @click.command()
@@ -130,9 +110,7 @@ def _iso8601(ts_seconds: float) -> str:
 )
 @click.option(
     "--repository",
-    type=click.Choice(
-        ["SRA", "ENA, DDBJ".split(", ")[0], "DDBJ"], case_sensitive=False
-    ),
+    type=click.Choice(["SRA", "ENA", "DDBJ"], case_sensitive=False),
     default="SRA",
     show_default=True,
     help="Source repository to benchmark.",
@@ -169,7 +147,7 @@ def _iso8601(ts_seconds: float) -> str:
     type=int,
     default=1,
     show_default=True,
-    help="Repeat the download N times and print aggregate stats (submission uses last trial).",
+    help="Repeat the download N times and print aggregate stats.",
 )
 @click.option(
     "--timeout",
@@ -181,12 +159,17 @@ def _iso8601(ts_seconds: float) -> str:
 @click.option(
     "--explain",
     is_flag=True,
-    help="Print candidate URLs and which ones are live (debug resolution).",
+    help="Print candidate URLs and which ones are live.",
 )
 @click.option(
     "--no-submit",
     is_flag=True,
-    help="Perform benchmark but skip submission step (printing only).",
+    help="Perform benchmark but skip submission step.",
+)
+@click.option(
+    "--deterministic-dataset-file",
+    default=None,
+    help="Optional path to deterministic_datasets_v2.csv for pre-resolved URLs/checksums.",
 )
 def main(
     dataset: str,
@@ -199,13 +182,13 @@ def main(
     timeout: int,
     explain: bool,
     no_submit: bool,
+    deterministic_dataset_file: Optional[str],
 ) -> None:
     """Resolve URL(s), download first, time transfer, sample metrics, and print/submit results."""
     print("\n" + "=" * 70)
     print("🌐 INSDC Benchmarking - HTTP/HTTPS Protocol")
     print("=" * 70)
 
-    # --- Print configuration for reproducibility ---
     print("\n📋 Configuration:")
     print(f"   Dataset: {dataset}")
     print(f"   Repository: {repository}")
@@ -214,75 +197,113 @@ def main(
     repository = repository.upper()
     urls: List[str] = []
     note: Optional[str] = None
+    deterministic_record: Optional[Dict[str, Any]] = None
 
-    # --- Resolve URLs based on repository/mode ---
-    if repository == "SRA":
-        # Narrow runtime string from Click into a Literal for type-checkers
-        m_lower = mirror.lower()
-        assert m_lower in {"auto", "aws", "gcs"}, "--mirror must be one of auto/aws/gcs"
-        mirror_lit = cast(Literal["auto", "aws", "gcs"], m_lower)
-        urls, res = resolve_sra_urls_ex(
-            dataset, mode=sra_mode, preferred_mirror=mirror_lit, timeout=timeout
-        )
+    if deterministic_dataset_file:
+        deterministic_record = load_run_record(deterministic_dataset_file, dataset)
 
-        print(f"   Resolved {len(urls)} file(s):")
-        for u in urls[:3]:
-            print(f"     - {u}")
-        if len(urls) > 3:
-            print(f"     - (+{len(urls) - 3} more)")
+        if deterministic_record:
+            status = deterministic_record["status"]
+            if status != "ACTIVE":
+                raise SystemExit(
+                    f"❌ Run {dataset} is marked as {status} in deterministic dataset."
+                )
 
-        if getattr(res, "note", ""):
-            note = res.note
-            print(f"   Note: {res.note}")
+            urls = cast(List[str], deterministic_record["fastq_url_list"])
+            note = (
+                f"Resolved via deterministic dataset "
+                f"({deterministic_record['category']})"
+            )
 
-        if explain:
-            print("\n🔎 Resolution detail")
-            print("   Candidates (in order tried):")
-            for c in res.candidates:
-                mark = "LIVE" if c in res.live else "—"
-                print(f"     - [{mark}] {c}")
+            if not urls:
+                raise SystemExit(
+                    f"❌ No FASTQ URLs stored for {dataset} in deterministic dataset."
+                )
 
-        # Enforce strict mirror requirement if requested
-        if require_mirror:
-            wants_aws = mirror.lower() == "aws"
-            wants_gcs = mirror.lower() == "gcs"
-            if wants_aws and not any(
-                u.startswith("https://sra-pub-run-odp.s3.amazonaws.com")
-                for u in res.live
-            ):
-                raise SystemExit("❌ --require-mirror=aws but no live objects on AWS.")
-            if wants_gcs and not any(
-                u.startswith("https://storage.googleapis.com") for u in res.live
-            ):
-                raise SystemExit("❌ --require-mirror=gcs but no live objects on GCS.")
+            print("   Using deterministic dataset metadata.")
+            print(f"   Resolved {len(urls)} file(s):")
+            for u in urls[:3]:
+                print(f"     - {u}")
+            if len(urls) > 3:
+                print(f"     - (+{len(urls) - 3} more)")
+        else:
+            print(
+                "   Run not found in deterministic dataset, falling back to resolver."
+            )
 
-    elif repository == "ENA":
-        urls = resolve_ena_fastq_urls(dataset, timeout=timeout)
-        if not urls:
-            raise SystemExit(f"❌ No FASTQ HTTPS URLs on ENA for {dataset}.")
-        print(f"   Resolved {len(urls)} file(s) via ENA.")
-        for u in urls[:3]:
-            print(f"     - {u}")
-        if len(urls) > 3:
-            print(f"     - (+{len(urls) - 3} more)")
+    # Only resolve from repository if deterministic dataset did not already provide URLs.
+    if not urls:
+        if repository == "SRA":
+            m_lower = mirror.lower()
+            assert m_lower in {
+                "auto",
+                "aws",
+                "gcs",
+            }, "--mirror must be one of auto/aws/gcs"
+            mirror_lit = cast(Literal["auto", "aws", "gcs"], m_lower)
+            urls, res = resolve_sra_urls_ex(
+                dataset,
+                mode=sra_mode,
+                preferred_mirror=mirror_lit,
+                timeout=timeout,
+            )
 
-    elif repository == "DDBJ":
-        raise SystemExit("DDBJ resolver not implemented yet.")
-    else:
-        raise SystemExit(f"Unsupported repository: {repository}")
+            print(f"   Resolved {len(urls)} file(s):")
+            for u in urls[:3]:
+                print(f"     - {u}")
+            if len(urls) > 3:
+                print(f"     - (+{len(urls) - 3} more)")
 
-    # --------------------------------------------------------------
-    # From here down: single-file timing using the FIRST resolved URL
-    # --------------------------------------------------------------
+            if getattr(res, "note", ""):
+                note = res.note
+                print(f"   Note: {res.note}")
+
+            if explain:
+                print("\n🔎 Resolution detail")
+                print("   Candidates (in order tried):")
+                for c in res.candidates:
+                    mark = "LIVE" if c in res.live else "—"
+                    print(f"     - [{mark}] {c}")
+
+            if require_mirror:
+                wants_aws = mirror.lower() == "aws"
+                wants_gcs = mirror.lower() == "gcs"
+                if wants_aws and not any(
+                    u.startswith("https://sra-pub-run-odp.s3.amazonaws.com")
+                    for u in res.live
+                ):
+                    raise SystemExit(
+                        "❌ --require-mirror=aws but no live objects on AWS."
+                    )
+                if wants_gcs and not any(
+                    u.startswith("https://storage.googleapis.com") for u in res.live
+                ):
+                    raise SystemExit(
+                        "❌ --require-mirror=gcs but no live objects on GCS."
+                    )
+
+        elif repository == "ENA":
+            urls = resolve_ena_fastq_urls(dataset, timeout=timeout)
+            if not urls:
+                raise SystemExit(f"❌ No FASTQ HTTPS URLs on ENA for {dataset}.")
+            print(f"   Resolved {len(urls)} file(s) via ENA.")
+            for u in urls[:3]:
+                print(f"     - {u}")
+            if len(urls) > 3:
+                print(f"     - (+{len(urls) - 3} more)")
+
+        elif repository == "DDBJ":
+            raise SystemExit("DDBJ resolver not implemented yet.")
+        else:
+            raise SystemExit(f"Unsupported repository: {repository}")
 
     print("\n📊 Baseline Measurements")
     print("-" * 70)
 
-    target_url = urls[0]  # First URL wins for the simple benchmark
+    target_url = urls[0]
     target_host = _host_for_latency_from_url(target_url)
 
-    # --- Optional baselines: local write and network (best-effort) ---
-    baseline_local = get_baseline_metrics()  # {"write_speed_mbps": float|None}
+    baseline_local = get_baseline_metrics()
     baseline_net = (
         get_network_baseline(host=target_host)
         if target_host
@@ -297,11 +318,15 @@ def main(
     durations: List[float] = []
     md5_last = ""
     sha256_last = ""
+    expected_md5: Optional[str] = None
+    checksum_match: Optional[bool] = None
     last_sys_avgs: Dict[str, Any] = {"cpu_usage_percent": 0.0, "memory_usage_mb": 0.0}
 
-    # The *exact* timestamps to report:
-    # - start_ts: when the FIRST trial actually begins (before wget call)
-    # - end_ts  : when the LAST trial actually ends (after wget returns)
+    if deterministic_record:
+        md5s = cast(List[str], deterministic_record["fastq_md5_list"])
+        if md5s:
+            expected_md5 = md5s[0]
+
     start_ts: Optional[float] = None
     end_ts: Optional[float] = None
 
@@ -313,11 +338,9 @@ def main(
         print("-" * 70)
         print(f"   Running: wget -O {out_path.name} {target_url}")
 
-        # Sample system metrics while download proceeds
         mon = SystemMonitor(interval=0.5)
         mon.start()
 
-        # Mark start timestamp at the start of the first trial
         t0 = time.time()
         if start_ts is None:
             start_ts = t0
@@ -325,13 +348,10 @@ def main(
         try:
             _wget(out_path, target_url)
         finally:
-            # Ensure we always record timing even if wget throws
             t1 = time.time()
             mon.stop()
-            # Always update end_ts; after final loop iteration, this is the "end of last trial"
             end_ts = t1
 
-        # File size and timing
         try:
             size_bytes = out_path.stat().st_size
         except FileNotFoundError:
@@ -340,19 +360,19 @@ def main(
         duration = t1 - t0
         avg_mbps = _pretty_mbps(size_bytes, duration)
 
-        # Checksums for reproducibility
         if size_bytes > 0:
             print("\n🔐 Calculating checksums...")
             md5_last = _md5(out_path)
             sha256_last = _sha256(out_path)
+            if expected_md5:
+                checksum_match = md5_last == expected_md5
         else:
             md5_last = ""
             sha256_last = ""
+            checksum_match = None
 
-        # Average CPU/memory during the transfer (store for submission)
         last_sys_avgs = mon.get_averages()
 
-        # Print per-trial summary
         print("\n✅ Download Complete!" if size_bytes > 0 else "\n❌ Download Failed!")
         print("   Files: 1")
         print(f"   Total size: {size_bytes / (1024 * 1024):.2f} MB")
@@ -361,20 +381,21 @@ def main(
         if md5_last:
             print(f"   MD5 checksum: {md5_last}")
             print(f"   SHA256 checksum: {sha256_last}")
+        if expected_md5:
+            print(f"   Expected MD5: {expected_md5}")
+            print(f"   MD5 match: {checksum_match}")
         print(f"   CPU usage: {last_sys_avgs.get('cpu_usage_percent', 0)}%")
         print(f"   Memory usage: {last_sys_avgs.get('memory_usage_mb', 0):.1f} MB")
 
         sizes.append(size_bytes)
         durations.append(duration)
 
-        # Clean up the downloaded file each trial to avoid disk buildup
         try:
             out_path.unlink(missing_ok=True)
             print("\n🗑️  Cleaned up 1 downloaded file(s)")
         except Exception:
             pass
 
-    # Aggregate reporting if repeats > 1 (prints only; submission uses the last trial by design)
     if repeats > 1:
         speeds = [_pretty_mbps(s, d) for s, d in zip(sizes, durations)]
         print("\n📈 Aggregate over", repeats, "runs")
@@ -389,11 +410,6 @@ def main(
             f"p95: {statistics.quantiles(durations, n=20)[18]:.2f} s"
         )
 
-    # --------------------------------------------
-    # Build result JSON (compatible with v1.2 schema)
-    # - timestamp: start of first trial (ISO 8601 UTC)
-    # - end_timestamp: end of last trial (ISO 8601 UTC)
-    # --------------------------------------------
     last_size = sizes[-1] if sizes else 0
     last_duration = durations[-1] if durations else 0.0
     last_speed = _pretty_mbps(last_size, last_duration)
@@ -406,10 +422,10 @@ def main(
     packet_loss = baseline_net.get("packet_loss_percent")
 
     result: Dict[str, Any] = {
-        "timestamp": start_iso,  # REQUIRED by schema
-        "end_timestamp": end_iso,  # OPTIONAL in schema v1.2
+        "timestamp": start_iso,
+        "end_timestamp": end_iso,
         "site": site,
-        "protocol": "http",  # This CLI specifically benchmarks HTTP/HTTPS via wget
+        "protocol": "http",
         "repository": repository,
         "dataset_id": dataset,
         "duration_sec": round(last_duration, 2),
@@ -420,21 +436,20 @@ def main(
         "status": "success" if last_size > 0 and md5_last else "fail",
         "checksum_md5": md5_last or "",
         "checksum_sha256": sha256_last or "",
+        "expected_checksum_md5": expected_md5,
+        "checksum_match": checksum_match,
         "write_speed_mbps": baseline_local.get("write_speed_mbps"),
         "network_latency_ms": net_latency,
         "packet_loss_percent": packet_loss,
-        # Flatten traceroute output as an array of lines (if present)
         "network_path": net_path,
         "tool_version": _wget_version() or "wget",
         "notes": note or None,
         "error_message": None,
     }
 
-    # Print the JSON-ish object for visibility
     print("\n🧾 Result (schema v1.2 fields subset):")
     print(json.dumps(result, indent=2))
 
-    # Submit unless skipped
     if no_submit:
         print("\n⏭️  Skipping submission (--no-submit)")
     else:
@@ -443,7 +458,7 @@ def main(
             if not endpoint:
                 print("⚠️  BENCHMARK_SUBMIT_URL not set; skipping submission.")
             else:
-                submit_result(endpoint, result)  # (url: str, payload: dict[str, Any])
+                submit_result(endpoint, result)
                 print("\n📤 Submitted result successfully.")
         except Exception as e:
             print(f"\n⚠️  Submission error: {e}")

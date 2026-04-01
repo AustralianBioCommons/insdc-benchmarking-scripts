@@ -425,7 +425,7 @@ def main(
         "timestamp": start_iso,
         "end_timestamp": end_iso,
         "site": site,
-        "protocol": "http",
+        "protocol": "wget",
         "repository": repository,
         "dataset_id": dataset,
         "duration_sec": round(last_duration, 2),

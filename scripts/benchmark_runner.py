@@ -1,117 +1,20 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import csv
-import hashlib
 import json
-import time
+import subprocess
 from pathlib import Path
-from urllib.request import urlretrieve
+from typing import Any, Callable
 
-
-DATASET = Path("data/deterministic_datasets_v2.csv")
-DEFAULT_DOWNLOAD_DIR = Path("data/downloads")
+DEFAULT_DATASET = Path("scripts/data/deterministic_datasets_v2.csv")
 DEFAULT_RESULTS_FILE = Path("data/benchmark_results.csv")
-
-
-def compute_md5(filepath: Path) -> str:
-    hash_md5 = hashlib.md5()
-    with filepath.open("rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
-
-
-def download_file(url: str, dest: Path) -> None:
-    ftp_url = (
-        url if url.startswith(("ftp://", "http://", "https://")) else f"ftp://{url}"
-    )
-    urlretrieve(ftp_url, dest)
 
 
 def load_rows(dataset_path: Path) -> list[dict[str, str]]:
     with dataset_path.open(newline="") as f:
-        reader = csv.DictReader(f)
-        return list(reader)
-
-
-def append_result(results_file: Path, row: dict[str, object]) -> None:
-    results_file.parent.mkdir(parents=True, exist_ok=True)
-    file_exists = results_file.exists()
-
-    with results_file.open("a", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "category",
-                "run_accession",
-                "file_index",
-                "file_name",
-                "status",
-                "download_url",
-                "expected_md5",
-                "actual_md5",
-                "download_seconds",
-                "bytes_on_disk",
-                "error",
-            ],
-        )
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run benchmark downloads from deterministic_datasets_v2.csv"
-    )
-    parser.add_argument(
-        "--dataset",
-        type=Path,
-        default=DATASET,
-        help="Path to deterministic dataset CSV",
-    )
-    parser.add_argument(
-        "--download-dir",
-        type=Path,
-        default=DEFAULT_DOWNLOAD_DIR,
-        help="Directory for downloaded files",
-    )
-    parser.add_argument(
-        "--results-file",
-        type=Path,
-        default=DEFAULT_RESULTS_FILE,
-        help="CSV file for benchmark results",
-    )
-    parser.add_argument(
-        "--category",
-        action="append",
-        help="Category to include. Can be passed multiple times.",
-    )
-    parser.add_argument(
-        "--run-accession",
-        action="append",
-        help="Specific run accession to include. Can be passed multiple times.",
-    )
-    parser.add_argument(
-        "--status", default="ACTIVE", help="Status to include. Default: ACTIVE"
-    )
-    parser.add_argument(
-        "--limit-runs",
-        type=int,
-        help="Maximum number of runs to process after filtering",
-    )
-    parser.add_argument(
-        "--limit-files", type=int, help="Maximum number of files to process total"
-    )
-    parser.add_argument(
-        "--keep-files",
-        action="store_true",
-        help="Keep downloaded files after checksum validation",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would run without downloading"
-    )
-    return parser.parse_args()
+        return list(csv.DictReader(f))
 
 
 def should_include_row(row: dict[str, str], args: argparse.Namespace) -> bool:
@@ -124,135 +27,378 @@ def should_include_row(row: dict[str, str], args: argparse.Namespace) -> bool:
     return True
 
 
+def build_http_command(
+    dataset_id: str, dataset_file: Path, args: argparse.Namespace
+) -> list[str]:
+    cmd = [
+        "poetry",
+        "run",
+        "benchmark-http",
+        "--dataset",
+        dataset_id,
+        "--repository",
+        args.repository,
+        "--site",
+        args.site,
+        "--repeats",
+        str(args.repeats),
+        "--timeout",
+        str(args.timeout),
+        "--deterministic-dataset-file",
+        str(dataset_file),
+        "--no-submit",
+    ]
+
+    if args.repository.upper() == "SRA":
+        cmd.extend(["--sra-mode", args.sra_mode, "--mirror", args.mirror])
+        if args.require_mirror:
+            cmd.append("--require-mirror")
+        if args.explain:
+            cmd.append("--explain")
+
+    return cmd
+
+
+def build_ftp_command(
+    dataset_id: str, dataset_file: Path, args: argparse.Namespace
+) -> list[str]:
+    return [
+        "poetry",
+        "run",
+        "benchmark-ftp",
+        "--dataset",
+        dataset_id,
+        "--repository",
+        args.repository,
+        "--site",
+        args.site,
+        "--repeats",
+        str(args.repeats),
+        "--timeout",
+        str(args.timeout),
+        "--ftp-timeout",
+        str(args.ftp_timeout),
+        "--deterministic-dataset-file",
+        str(dataset_file),
+        "--no-submit",
+    ]
+
+
+ProtocolBuilder = Callable[[str, Path, argparse.Namespace], list[str]]
+
+PROTOCOLS: dict[str, ProtocolBuilder] = {
+    "http": build_http_command,
+    "ftp": build_ftp_command,
+    # future:
+    # "globus": build_globus_command,
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run protocol benchmarks across deterministic dataset runs"
+    )
+    parser.add_argument(
+        "--dataset-file",
+        type=Path,
+        default=DEFAULT_DATASET,
+        help="Path to deterministic_datasets_v2.csv",
+    )
+    parser.add_argument(
+        "--results-file",
+        type=Path,
+        default=DEFAULT_RESULTS_FILE,
+        help="CSV file for aggregated benchmark results",
+    )
+    parser.add_argument(
+        "--protocol",
+        action="append",
+        choices=sorted(PROTOCOLS.keys()),
+        help="Protocol(s) to benchmark. Can be passed multiple times. Default: all registered protocols",
+    )
+    parser.add_argument(
+        "--category",
+        action="append",
+        help="Category to include. Can be passed multiple times.",
+    )
+    parser.add_argument(
+        "--run-accession",
+        action="append",
+        help="Specific run accession to include. Can be passed multiple times.",
+    )
+    parser.add_argument(
+        "--status",
+        default="ACTIVE",
+        help="Status to include. Default: ACTIVE",
+    )
+    parser.add_argument(
+        "--limit-runs",
+        type=int,
+        help="Maximum number of runs to process after filtering",
+    )
+    parser.add_argument(
+        "--site",
+        default="nci",
+        help="Site identifier passed through to benchmark scripts",
+    )
+    parser.add_argument(
+        "--repository",
+        default="ENA",
+        help="Repository passed through to benchmark scripts",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=20,
+        help="Resolver timeout passed through to benchmark scripts",
+    )
+    parser.add_argument(
+        "--ftp-timeout",
+        type=int,
+        default=30,
+        help="FTP timeout passed to benchmark-ftp",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Repeat count passed through to benchmark scripts",
+    )
+    parser.add_argument(
+        "--sra-mode",
+        default="sra_cloud",
+        help="SRA mode passed to benchmark-http when repository=SRA",
+    )
+    parser.add_argument(
+        "--mirror",
+        default="auto",
+        help="Mirror passed to benchmark-http when repository=SRA",
+    )
+    parser.add_argument(
+        "--require-mirror",
+        action="store_true",
+        help="Pass --require-mirror to benchmark-http",
+    )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Pass --explain to benchmark-http",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show commands without executing them",
+    )
+    return parser.parse_args()
+
+
+def extract_result_json(stdout: str) -> dict[str, Any] | None:
+    marker = "🧾 Result (schema v1.2 fields subset):"
+    marker_index = stdout.find(marker)
+    if marker_index == -1:
+        return None
+
+    after_marker = stdout[marker_index + len(marker) :].strip()
+    start = after_marker.find("{")
+    if start == -1:
+        return None
+
+    json_candidate = after_marker[start:]
+    decoder = json.JSONDecoder()
+
+    try:
+        obj, _ = decoder.raw_decode(json_candidate)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        return None
+
+    return None
+
+
+def append_result(results_file: Path, row: dict[str, object]) -> None:
+    results_file.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = results_file.exists()
+
+    with results_file.open("a", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "run_accession",
+                "category",
+                "protocol",
+                "repository",
+                "site",
+                "status",
+                "duration_sec",
+                "file_size_bytes",
+                "average_speed_mbps",
+                "checksum_md5",
+                "expected_checksum_md5",
+                "checksum_match",
+                "timestamp",
+                "end_timestamp",
+                "notes",
+                "error_message",
+                "command",
+            ],
+        )
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def build_command(
+    protocol: str,
+    dataset_id: str,
+    dataset_file: Path,
+    args: argparse.Namespace,
+) -> list[str]:
+    builder = PROTOCOLS.get(protocol)
+    if builder is None:
+        raise ValueError(f"Unsupported protocol: {protocol}")
+    return builder(dataset_id, dataset_file, args)
+
+
 def main() -> int:
     args = parse_args()
 
-    if not args.dataset.exists():
-        raise SystemExit(f"Dataset file not found: {args.dataset}")
+    if not args.dataset_file.exists():
+        raise SystemExit(f"Dataset file not found: {args.dataset_file}")
 
-    rows = load_rows(args.dataset)
+    protocols = args.protocol or list(PROTOCOLS.keys())
+
+    rows = load_rows(args.dataset_file)
     rows = [row for row in rows if should_include_row(row, args)]
 
     if args.limit_runs is not None:
         rows = rows[: args.limit_runs]
 
-    args.download_dir.mkdir(parents=True, exist_ok=True)
-
-    total_files = 0
+    total_jobs = 0
     success = 0
     failures = 0
     skipped_runs = 0
 
     for row in rows:
-        category = row["CATEGORY"]
         run_id = row["RUN_ACCESSION"]
+        category = row["CATEGORY"]
         status = row["STATUS"]
 
         if status != "ACTIVE":
             skipped_runs += 1
+            print(f"Skipping {run_id}: status={status}")
             continue
 
-        md5_list = json.loads(row["FASTQ_MD5_LIST"])
-        url_list = json.loads(row["FASTQ_URL_LIST"])
-
-        if len(md5_list) != len(url_list):
-            print(f"Skipping {run_id}: MD5/URL count mismatch")
-            skipped_runs += 1
-            continue
-
-        for file_index, (expected_md5, url) in enumerate(
-            zip(md5_list, url_list), start=1
-        ):
-            if args.limit_files is not None and total_files >= args.limit_files:
-                print("\nReached file limit.")
-                print_summary(total_files, success, failures, skipped_runs)
-                return 0
-
-            total_files += 1
-            file_name = url.split("/")[-1]
-            dest = args.download_dir / file_name
+        for protocol in protocols:
+            total_jobs += 1
+            cmd = build_command(protocol, run_id, args.dataset_file, args)
 
             if args.dry_run:
-                print(f"[DRY RUN] {category} {run_id} file {file_index}: {url}")
+                print("[DRY RUN]", " ".join(cmd))
                 append_result(
                     args.results_file,
                     {
-                        "category": category,
                         "run_accession": run_id,
-                        "file_index": file_index,
-                        "file_name": file_name,
+                        "category": category,
+                        "protocol": protocol,
+                        "repository": args.repository,
+                        "site": args.site,
                         "status": "DRY_RUN",
-                        "download_url": url,
-                        "expected_md5": expected_md5,
-                        "actual_md5": "",
-                        "download_seconds": "",
-                        "bytes_on_disk": "",
-                        "error": "",
+                        "duration_sec": "",
+                        "file_size_bytes": "",
+                        "average_speed_mbps": "",
+                        "checksum_md5": "",
+                        "expected_checksum_md5": "",
+                        "checksum_match": "",
+                        "timestamp": "",
+                        "end_timestamp": "",
+                        "notes": "",
+                        "error_message": "",
+                        "command": " ".join(cmd),
                     },
                 )
                 continue
 
-            print(
-                f"Downloading {category} | {run_id} | file {file_index}/{len(md5_list)}"
+            print(f"\nRunning {protocol.upper()} benchmark for {run_id} ({category})")
+            print("Command:", " ".join(cmd))
+
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
             )
 
-            actual_md5 = ""
-            elapsed: float | None = None
-            bytes_on_disk: int | None = None
-            error = ""
-            result_status = "FAILED"
+            result_json = extract_result_json(completed.stdout)
+            combined_error = completed.stderr.strip() or ""
 
-            try:
-                start = time.time()
-                download_file(url, dest)
-                elapsed = round(time.time() - start, 3)
-                actual_md5 = compute_md5(dest)
-                bytes_on_disk = dest.stat().st_size
+            if completed.returncode == 0 and result_json:
+                row_out = {
+                    "run_accession": run_id,
+                    "category": category,
+                    "protocol": protocol,
+                    "repository": result_json.get("repository", args.repository),
+                    "site": result_json.get("site", args.site),
+                    "status": result_json.get("status", "unknown"),
+                    "duration_sec": result_json.get("duration_sec", ""),
+                    "file_size_bytes": result_json.get("file_size_bytes", ""),
+                    "average_speed_mbps": result_json.get("average_speed_mbps", ""),
+                    "checksum_md5": result_json.get("checksum_md5", ""),
+                    "expected_checksum_md5": result_json.get(
+                        "expected_checksum_md5", ""
+                    ),
+                    "checksum_match": result_json.get("checksum_match", ""),
+                    "timestamp": result_json.get("timestamp", ""),
+                    "end_timestamp": result_json.get("end_timestamp", ""),
+                    "notes": result_json.get("notes", ""),
+                    "error_message": result_json.get("error_message", combined_error),
+                    "command": " ".join(cmd),
+                }
+                append_result(args.results_file, row_out)
 
-                if actual_md5 == expected_md5:
-                    result_status = "OK"
+                if result_json.get("status") == "success":
                     success += 1
-                    print(f"  OK in {elapsed}s")
+                    print("  OK")
                 else:
-                    result_status = "MD5_MISMATCH"
                     failures += 1
-                    print("  MD5 mismatch")
-            except Exception as exc:
+                    print("  FAIL")
+            else:
                 failures += 1
-                error = str(exc)
-                print(f"  Error: {error}")
-            finally:
+                error_text = combined_error or completed.stdout[-1000:]
+
                 append_result(
                     args.results_file,
                     {
-                        "category": category,
                         "run_accession": run_id,
-                        "file_index": file_index,
-                        "file_name": file_name,
-                        "status": result_status,
-                        "download_url": url,
-                        "expected_md5": expected_md5,
-                        "actual_md5": actual_md5,
-                        "download_seconds": elapsed,
-                        "bytes_on_disk": bytes_on_disk,
-                        "error": error,
+                        "category": category,
+                        "protocol": protocol,
+                        "repository": args.repository,
+                        "site": args.site,
+                        "status": "runner_fail",
+                        "duration_sec": "",
+                        "file_size_bytes": "",
+                        "average_speed_mbps": "",
+                        "checksum_md5": "",
+                        "expected_checksum_md5": "",
+                        "checksum_match": "",
+                        "timestamp": "",
+                        "end_timestamp": "",
+                        "notes": "",
+                        "error_message": error_text,
+                        "command": " ".join(cmd),
                     },
                 )
-                if dest.exists() and not args.keep_files:
-                    dest.unlink()
+                print("  FAIL")
+                if error_text:
+                    print(error_text)
 
-    print_summary(total_files, success, failures, skipped_runs)
-    return 0
-
-
-def print_summary(
-    total_files: int, success: int, failures: int, skipped_runs: int
-) -> None:
     print("\nSummary")
-    print(f"  Total files: {total_files}")
-    print(f"  Success:     {success}")
-    print(f"  Failures:    {failures}")
-    print(f"  Skipped:     {skipped_runs}")
+    print(f"  Total jobs:   {total_jobs}")
+    print(f"  Success:      {success}")
+    print(f"  Failures:     {failures}")
+    print(f"  Skipped runs: {skipped_runs}")
+    print(f"  Results file: {args.results_file}")
+
+    return 0 if failures == 0 else 1
 
 
 if __name__ == "__main__":

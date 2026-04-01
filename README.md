@@ -1,211 +1,123 @@
-🌐 INSDC Benchmarking Scripts
-=============================
+# INSDC Benchmarking Scripts
 
-Automated benchmarking tools for testing **INSDC data download performance** across repositories (**ENA**, **SRA**, and **DDBJ**) and multiple transfer protocols.
+A benchmarking toolkit for INSDC data access (ENA, SRA, DDBJ).
 
-* * * * *
+This project focuses on:
 
-🚀 Quick Start
---------------
+- reproducible benchmarking using deterministic datasets
+- performance measurement across protocols (FTP, HTTP via wget)
+- checksum validation for data integrity
 
-### 1\. Install
+---
+
+## 🚀 Primary Usage (Recommended)
+
+The main supported entry points are:
+
+- `benchmark-http` (uses wget over HTTP/HTTPS)
+- `benchmark-ftp` (uses Python ftplib)
+
+These commands provide the core benchmarking functionality.
+
+---
+
+## 🧪 Example Usage
+
+### HTTP (via wget)
 
 ```bash
-pip install insdc-benchmarking-scripts
-```
-
-### 2\. Configure
-
-```
-cp config.yaml.example config.yaml
-# Edit config.yaml:
-# site: nci
-# api_endpoint: https://your.api/submit
-# api_token: YOUR_TOKEN   # optional
-
-```
-
-### 3\. Run a Benchmark
-
-#### HTTP/HTTPS (wget-based)
-
-```
-benchmark-http --dataset DRR12345678 --repository ENA --site nci
-
-```
-
-#### SRA Cloud .sra Objects (AWS/GCS)
-
-```
-benchmark-http\
-  --dataset DRR000001\
-  --repository SRA\
-  --sra-mode sra_cloud\
-  --mirror auto\
+poetry run benchmark-http \
+  --dataset ERR3853594 \
+  --repository ENA \
+  --deterministic-dataset-file scripts/data/deterministic_datasets_v2.csv \
   --no-submit
-
 ```
 
-#### ENA FASTQ via HTTPS
+### FTP
 
-```
-benchmark-http\
-  --dataset SRR000001\
-  --repository ENA\
+```bash
+poetry run benchmark-ftp \
+  --dataset ERR3853594 \
+  --repository ENA \
+  --deterministic-dataset-file scripts/data/deterministic_datasets_v2.csv \
   --no-submit
-
 ```
 
-* * * * *
+---
 
-🧠 Key Features
----------------
+## 📊 Deterministic Dataset
 
--   ✅ HTTP/HTTPS benchmarking using wget
--   ✅ SRA Cloud (AWS/GCS) .sra object downloads
--   ✅ ENA FASTQ over HTTPS
--   🧩 Automatic system metrics --- CPU%, memory MB, disk write speed
--   🌍 Network baselines --- ping/traceroute latency and route
--   🧾 JSON output aligned with INSDC Benchmarking Schema v1.2
--   📤 Optional API submission (secure HTTP POST)
--   🧪 Repeatable tests with `--repeats` and aggregate stats
--   🧰 Mirror control for SRA: `--mirror [aws|gcs|auto]`, `--require-mirror`, `--explain`
+A curated dataset (`deterministic_datasets_v2.csv`) is used to ensure:
 
-* * * * *
+- stable file URLs
+- correct MD5 checksums
+- reproducible benchmarking
 
-📦 Supported Protocols
-----------------------
+This dataset was rebuilt after the initial dataset was found to contain incorrect checksums.
 
-| Protocol | Implementation | Status |
-| --- | --- | --- |
-| HTTP/HTTPS | wget | ✅ Stable |
-| FTP | ftplib | ✅ Stable |
-| Globus | Python SDK | 🔄 Planned |
-| Aspera | CLI SDK | 🔄 Planned |
-| SRA Toolkit | fasterq-dump (wrapper) | 🔄 Planned |
+---
 
-* * * * *
+## ✅ Checksum Validation
 
-⚙️ Configuration
-----------------
+For each run:
 
-See `config.yaml.example`:
+1. File is downloaded
+2. MD5 checksum is computed
+3. Compared against expected checksum
 
-```
-site: nci
-api_endpoint: https://your.api/submit
-api_token: your-secret-token
+### Result logic
 
-```
+- success → download OK + checksum match
+- fail → download failed OR checksum mismatch
 
-* * * * *
+---
 
-📊 Example Output
------------------
+## 📐 Schema Alignment
 
-```
-{
-  "timestamp": "2025-11-06T06:21:33Z",
-  "end_timestamp": "2025-11-06T06:23:05Z",
-  "site": "nci",
-  "protocol": "http",
-  "repository": "SRA",
-  "dataset_id": "DRR000001",
-  "duration_sec": 92.3,
-  "file_size_bytes": 596137898,
-  "average_speed_mbps": 51.6,
-  "cpu_usage_percent": 7.2,
-  "memory_usage_mb": 10300.5,
-  "status": "success",
-  "checksum_md5": "bf11d3ea9d7e0b6e984998ea2dfd53ca",
-  "write_speed_mbps": 3350.3,
-  "network_latency_ms": 8.9,
-  "tool_version": "GNU Wget 1.21.4",
-  "notes": "Resolved from AWS ODP mirror"
-}
+Results are designed to align with the INSDC benchmarking schema:
 
-```
+https://github.com/AustralianBioCommons/insdc-benchmarking-schema
 
-* * * * *
+Important:
 
-🧱 Repository Structure
------------------------
+- HTTP benchmarking uses `"protocol": "wget"`
+- FTP benchmarking uses `"protocol": "ftp"`
 
-```
-insdc-benchmarking-scripts/
-├── scripts/
-│   ├── benchmark_http.py        # HTTP/HTTPS benchmarking CLI (Click)
-│   ├── benchmark_ftp.py         # FTP benchmarking (ftplib)
-│   └── benchmark_aspera.py      # Future Aspera integration
-│
-├── insdc_benchmarking_scripts/
-│   ├── utils/
-│   │   ├── repositories/        # ENA/SRA/DDBJ resolvers
-│   │   ├── system_metrics.py    # CPU/memory sampler
-│   │   ├── network_baseline.py  # ping/traceroute helpers
-│   │   ├── submit.py            # HTTP POST to results API
-│   │   └── config.py            # Config loader
-│   └── __init__.py
-│
-├── docs/
-│   ├── INSTALLATION.md          # Setup and verification instructions
-│   ├── USAGE.md                 # CLI usage and examples
-│   ├── protocols/               # Protocol-specific notes
-│   └── schema/                  # INSDC Benchmarking Schema v1.2
-│
-├── config.yaml.example          # Example configuration file
-├── requirements.txt             # Dependencies for pip installs
-├── pyproject.toml               # Poetry build config
-├── README.md                    # This file
-└── LICENSE
+---
 
-```
+## 📌 Scope
 
-* * * * *
+- currently benchmarks the first file per run
+- checksum validation applies per run
+- multi-file benchmarking is not yet implemented
 
-📚 Documentation
-----------------
+---
 
--   📘 [Installation Guide](docs/INSTALLATION.md)
--   🧭 [Usage Guide](docs/USAGE.md)
--   🧩 [Protocol Guides](docs/protocols/)
--   📄 [INSDC Benchmarking Schema v1.2](docs/schema/)
+## ⚙️ Optional: Benchmark Runner
 
-* * * * *
+A batch runner (`benchmark-runner`) exists for:
 
-🧭 Roadmap
-----------
+- running multiple datasets
+- filtering by category/status
+- aggregating results into CSV
 
--   [ ] Add Globus and Aspera benchmarking
--   [ ] Unified results ingestion API (FastAPI backend)
--   [ ] Web dashboard for live performance visualization
--   [ ] Scheduled batch benchmarking for curated datasets
--   [ ] Add object checksum validation and retry support
+However:
 
-* * * * *
+- it is not the primary interface
+- its CLI differs from the main commands
+- it is best suited for internal or large-scale runs
 
-🤝 Contributing
----------------
+---
 
-Contributions are welcome! Please open an issue or submit a pull request to add protocols, metrics, or infrastructure integrations.
+## 🛣️ Roadmap
 
-### Development Workflow
+- multi-file benchmarking
+- category-based batch execution
+- schema validation (pending Python upgrade)
+- reporting and summaries
 
-```
-# Fork and clone
-git clone https://github.com/AustralianBioCommons/insdc-benchmarking-scripts
-cd insdc-benchmarking-scripts
+---
 
-# Install dependencies
-poetry install
+## 📄 License
 
-# Run a test benchmark
-poetry run benchmark-http --dataset DRR000001 --repository ENA --no-submit
-
-```
-
-* * * * *
-
-**Maintained by:** Australian BioCommons\
-📍 University of Melbourne\
-🔗 Licensed under the Apache 2.0 License
+Apache 2.0

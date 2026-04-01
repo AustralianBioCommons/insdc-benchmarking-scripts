@@ -1,0 +1,22 @@
+{
+  "input_file": "Datasets - Sheet1.csv",
+  "rows_input": 12028,
+  "rows_clean": 11812,
+  "unique_runs": 11589,
+  "categories_present": [
+    "10000_RANDOM_1MB",
+    "1000_RANDOM_1GB",
+    "1000_RANDOM_1MB",
+    "10_RANDOM_1GB",
+    "10_RANDOM_1MB",
+    "1_GB_FILE",
+    "1_MB_FILE",
+    "1_TB_FILE",
+    "5_RANDOM_500GB"
+  ],
+  "bad_categories": 0,
+  "bad_accessions": 0,
+  "duplicate_within_category_rows": 432,
+  "runs_in_multiple_categories": 223,
+  "issues_total": 655
+}

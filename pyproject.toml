@@ -17,6 +17,7 @@ packages = [{include = "insdc_benchmarking_scripts"}]
 [tool.poetry.scripts]
 benchmark-http = "insdc_benchmarking_scripts.scripts.benchmark_http:main"
 benchmark-ftp = "insdc_benchmarking_scripts.scripts.benchmark_ftp:main"
+benchmark-runner = "insdc_benchmarking_scripts.scripts.benchmark_runner:main"
 
 [tool.poetry.dependencies]
 python = "^3.9"

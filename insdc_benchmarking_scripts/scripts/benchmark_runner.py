@@ -87,7 +87,7 @@ def build_ftp_command(
 ProtocolBuilder = Callable[[str, Path, argparse.Namespace], list[str]]
 
 PROTOCOLS: dict[str, ProtocolBuilder] = {
-    "http": build_http_command,
+    "wget": build_http_command,
     "ftp": build_ftp_command,
     # future:
     # "globus": build_globus_command,

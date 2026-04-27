@@ -3,32 +3,22 @@
 
 This CLI resolves FTP URLs for INSDC run accessions (SRR/ERR/DRR),
 downloads files using ftplib, times the transfer, computes checksums,
-samples system/network baselines, and prints/submits stats.
-
-Highlights
-----------
-- Native Python FTP implementation (no external dependencies)
-- ENA FTP support with automatic URL resolution
-- Optional deterministic dataset support for pre-resolved URLs/checksums
-- System metrics (CPU %, memory MB) and local write-speed baseline
-- Network baseline (ping / traceroute) targeting the FTP host
-- Produces JSON-compatible result matching v1.2 schema
-- Optional --repeats for multiple trials with aggregate statistics
+samples system/network baselines, and prints/submits schema-compliant results.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import statistics
 import time
 from ftplib import FTP
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 from urllib.parse import urlparse
 
 import click
 
+from insdc_benchmarking_schema import BenchmarkResult
 from insdc_benchmarking_scripts.utils import load_run_record
 from insdc_benchmarking_scripts.utils.network_baseline import get_network_baseline
 from insdc_benchmarking_scripts.utils.repositories import resolve_ena_fastq_urls
@@ -39,7 +29,8 @@ from insdc_benchmarking_scripts.utils.system_metrics import (
 )
 
 
-# --------------------------- Helpers ---------------------------
+RepositoryLiteral = Literal["ENA", "SRA", "DDBJ"]
+StatusLiteral = Literal["success", "fail", "partial"]
 
 
 def _md5(path: Path) -> str:
@@ -65,14 +56,14 @@ def _sha256(path: Path) -> str:
 
 
 def _pretty_mbps(bytes_count: int, seconds: float) -> float:
-    """Compute average Mbps (decimal megabits)."""
+    """Compute average Mbps using decimal megabits."""
     if seconds <= 0:
         return 0.0
     return (bytes_count * 8 / 1_000_000) / seconds
 
 
 def _iso8601(ts_seconds: float) -> str:
-    """Format a UNIX timestamp (seconds) as an ISO 8601 UTC string with Z suffix."""
+    """Format a UNIX timestamp as an ISO 8601 UTC string with Z suffix."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts_seconds))
 
 
@@ -87,8 +78,6 @@ def _convert_https_to_ftp(url: str) -> str:
     if url.startswith("http://"):
         return url.replace("http://", "ftp://", 1)
 
-    # Handle scheme-less values like:
-    # ftp.sra.ebi.ac.uk/vol1/fastq/...
     return f"ftp://{url}"
 
 
@@ -128,9 +117,6 @@ def _ftp_download(ftp_url: str, output_path: Path, timeout: int = 30) -> None:
             pass
 
 
-# ----------------------------- CLI -----------------------------
-
-
 @click.command()
 @click.option(
     "--dataset",
@@ -155,26 +141,26 @@ def _ftp_download(ftp_url: str, output_path: Path, timeout: int = 30) -> None:
     type=int,
     default=1,
     show_default=True,
-    help="Repeat the download N times and print aggregate stats (submission uses last trial).",
+    help="Repeat the download N times and print aggregate stats. Submission uses last trial.",
 )
 @click.option(
     "--timeout",
     type=int,
     default=20,
     show_default=True,
-    help="Resolver timeout (seconds) used when looking up URLs (e.g., ENA API).",
+    help="Resolver timeout in seconds used when looking up URLs.",
 )
 @click.option(
     "--ftp-timeout",
     type=int,
     default=30,
     show_default=True,
-    help="Socket timeout (seconds) for the FTP connection.",
+    help="Socket timeout in seconds for the FTP connection.",
 )
 @click.option(
     "--no-submit",
     is_flag=True,
-    help="Perform benchmark but skip submission step (printing only).",
+    help="Perform benchmark but skip submission step.",
 )
 @click.option(
     "--deterministic-dataset-file",
@@ -191,7 +177,7 @@ def main(
     no_submit: bool,
     deterministic_dataset_file: Optional[str],
 ) -> None:
-    """Resolve FTP URL(s), download first, time transfer, sample metrics, and print/submit results."""
+    """Resolve FTP URL(s), download first file, time transfer, sample metrics, and print/submit results."""
     print("\n" + "=" * 70)
     print("📁 INSDC Benchmarking - FTP Protocol")
     print("=" * 70)
@@ -201,7 +187,7 @@ def main(
     print(f"   Repository: {repository}")
     print(f"   Site: {site}")
 
-    repository = repository.upper()
+    repository = cast(RepositoryLiteral, repository.upper())
     urls: List[str] = []
     note: Optional[str] = None
     deterministic_record: Optional[Dict[str, Any]] = None
@@ -210,10 +196,10 @@ def main(
         deterministic_record = load_run_record(deterministic_dataset_file, dataset)
 
         if deterministic_record:
-            status = deterministic_record["status"]
-            if status != "ACTIVE":
+            deterministic_status = deterministic_record["status"]
+            if deterministic_status != "ACTIVE":
                 raise SystemExit(
-                    f"❌ Run {dataset} is marked as {status} in deterministic dataset."
+                    f"❌ Run {dataset} is marked as {deterministic_status} in deterministic dataset."
                 )
 
             https_urls = cast(List[str], deterministic_record["fastq_url_list"])
@@ -224,7 +210,7 @@ def main(
 
             urls = [_convert_https_to_ftp(u) for u in https_urls]
             note = (
-                f"Resolved via deterministic dataset "
+                "Resolved via deterministic dataset "
                 f"({deterministic_record['category']})"
             )
 
@@ -239,7 +225,6 @@ def main(
                 "   Run not found in deterministic dataset, falling back to resolver."
             )
 
-    # Only resolve from repository if deterministic dataset did not already provide URLs.
     if not urls:
         if repository == "ENA":
             https_urls = resolve_ena_fastq_urls(dataset, timeout=timeout)
@@ -261,6 +246,7 @@ def main(
 
         elif repository == "DDBJ":
             raise SystemExit("❌ DDBJ FTP resolver not implemented yet.")
+
         else:
             raise SystemExit(f"Unsupported repository: {repository}")
 
@@ -288,16 +274,17 @@ def main(
     sha256_last = ""
     expected_md5: Optional[str] = None
     checksum_match: Optional[bool] = None
-    last_sys_avgs: Dict[str, Any] = {"cpu_usage_percent": 0.0, "memory_usage_mb": 0.0}
-
-    start_ts: Optional[float] = None
-    end_ts: Optional[float] = None
+    last_sys_avgs: Dict[str, Any] = {
+        "cpu_usage_percent": 0.0,
+        "memory_usage_mb": 0.0,
+    }
 
     if deterministic_record:
         md5s = cast(List[str], deterministic_record["fastq_md5_list"])
         if md5s:
             expected_md5 = md5s[0]
 
+    start_ts: Optional[float] = None
     out_path = Path(dataset)
 
     for i in range(1, repeats + 1):
@@ -318,12 +305,10 @@ def main(
             _ftp_download(target_url, out_path, timeout=ftp_timeout)
         except Exception as e:
             print(f"❌ FTP download failed: {e}")
-            mon.stop()
             raise SystemExit(1)
         finally:
             t1 = time.time()
             mon.stop()
-            end_ts = t1
 
         try:
             size_bytes = out_path.stat().st_size
@@ -387,38 +372,51 @@ def main(
     last_duration = durations[-1] if durations else 0.0
     last_speed = _pretty_mbps(last_size, last_duration)
     start_iso = _iso8601(start_ts or time.time())
-    end_iso = _iso8601(end_ts or time.time())
 
-    result: Dict[str, Any] = {
-        "timestamp": start_iso,
-        "end_timestamp": end_iso,
-        "site": site,
-        "protocol": "ftp",
-        "repository": repository,
-        "dataset_id": dataset,
-        "duration_sec": round(last_duration, 2),
-        "file_size_bytes": int(last_size),
-        "average_speed_mbps": round(last_speed, 2),
-        "cpu_usage_percent": last_sys_avgs.get("cpu_usage_percent", 0.0),
-        "memory_usage_mb": last_sys_avgs.get("memory_usage_mb", 0.0),
-        "status": "success" if last_size > 0 and md5_last else "fail",
-        "checksum_md5": md5_last or "",
-        "checksum_sha256": sha256_last or "",
-        "expected_checksum_md5": expected_md5,
-        "checksum_match": checksum_match,
-        "write_speed_mbps": baseline_local.get("write_speed_mbps"),
-        "network_latency_ms": baseline_net.get("network_latency_ms"),
-        "packet_loss_percent": baseline_net.get("packet_loss_percent"),
-        "network_path": (baseline_net.get("network_path") or "").splitlines()
-        if baseline_net.get("network_path")
-        else None,
-        "tool_version": "Python ftplib",
-        "notes": note or None,
-        "error_message": None,
-    }
+    net_latency = baseline_net.get("network_latency_ms")
+    packet_loss = baseline_net.get("packet_loss_percent")
+    net_path_raw = baseline_net.get("network_path")
+    net_path = net_path_raw.splitlines() if isinstance(net_path_raw, str) else None
+    write_speed = baseline_local.get("write_speed_mbps")
 
-    print("\n🧾 Result (schema v1.2 fields subset):")
-    print(json.dumps(result, indent=2))
+    checksum_valid = bool(md5_last) and (
+        expected_md5 is None or md5_last == expected_md5
+    )
+
+    status: StatusLiteral = "success" if last_size > 0 and checksum_valid else "fail"
+
+    if not md5_last:
+        raise SystemExit(
+            "❌ Cannot build BenchmarkResult: checksum_md5 is required by schema."
+        )
+
+    result_obj = BenchmarkResult(
+        timestamp=start_iso,
+        site=site,
+        protocol="ftp",
+        repository=repository,
+        dataset_id=dataset,
+        duration_sec=round(last_duration, 2),
+        file_size_bytes=int(last_size),
+        average_speed_mbps=round(last_speed, 2),
+        cpu_usage_percent=last_sys_avgs.get("cpu_usage_percent", 0.0),
+        memory_usage_mb=last_sys_avgs.get("memory_usage_mb", 0.0),
+        status=status,
+        checksum_md5=md5_last,
+        checksum_sha256=sha256_last or None,
+        write_speed_mbps=write_speed,
+        network_latency_ms=net_latency,
+        packet_loss_percent=packet_loss,
+        network_path=net_path,
+        tool_version="Python ftplib",
+        notes=note,
+        error_message=None if status == "success" else "Checksum mismatch",
+    )
+
+    result = result_obj.dict(exclude_none=True)
+
+    print("\n🧾 Result:")
+    print(result_obj.json(indent=2, exclude_none=True))
 
     if no_submit:
         print("\n⏭️  Skipping submission (--no-submit)")

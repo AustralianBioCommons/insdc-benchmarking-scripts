@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import time
 import tempfile
+import threading
 from typing import List, Dict, Any, Optional
 
 try:
@@ -22,9 +23,14 @@ class SystemMonitor:
         self.memory_samples: List[float] = []
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
 
     def start(self):
         self.start_time = time.time()
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def sample(self):
         # CPU
@@ -43,8 +49,15 @@ class SystemMonitor:
             self.cpu_samples.append(0.0)
             self.memory_samples.append(0.0)
 
+    def _run(self):
+        while not self._stop_event.wait(self.interval):
+            self.sample()
+
     def stop(self):
         self.end_time = time.time()
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
 
     def get_averages(self) -> Dict[str, float]:
         cpu = sum(self.cpu_samples) / len(self.cpu_samples) if self.cpu_samples else 0.0

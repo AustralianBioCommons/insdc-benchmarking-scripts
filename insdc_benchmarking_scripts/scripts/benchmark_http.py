@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import socket
 import statistics
@@ -23,6 +22,7 @@ from insdc_benchmarking_scripts.utils.system_metrics import (
     SystemMonitor,
     get_baseline_metrics,
 )
+from insdc_benchmarking_schema import BenchmarkResult
 
 """HTTP/HTTPS benchmarking using wget.
 
@@ -194,7 +194,7 @@ def main(
     print(f"   Repository: {repository}")
     print(f"   Site: {site}")
 
-    repository = repository.upper()
+    repository = cast(Literal["ENA", "SRA", "DDBJ"], repository.upper())
     urls: List[str] = []
     note: Optional[str] = None
     deterministic_record: Optional[Dict[str, Any]] = None
@@ -328,7 +328,6 @@ def main(
             expected_md5 = md5s[0]
 
     start_ts: Optional[float] = None
-    end_ts: Optional[float] = None
 
     out_path = Path(dataset)
 
@@ -350,7 +349,6 @@ def main(
         finally:
             t1 = time.time()
             mon.stop()
-            end_ts = t1
 
         try:
             size_bytes = out_path.stat().st_size
@@ -414,41 +412,54 @@ def main(
     last_duration = durations[-1] if durations else 0.0
     last_speed = _pretty_mbps(last_size, last_duration)
     start_iso = _iso8601(start_ts or time.time())
-    end_iso = _iso8601(end_ts or time.time())
 
     net_latency = baseline_net.get("network_latency_ms")
     net_path_raw = baseline_net.get("network_path")
     net_path = net_path_raw.splitlines() if isinstance(net_path_raw, str) else None
     packet_loss = baseline_net.get("packet_loss_percent")
+    write_speed = baseline_local.get("write_speed_mbps")
 
-    result: Dict[str, Any] = {
-        "timestamp": start_iso,
-        "end_timestamp": end_iso,
-        "site": site,
-        "protocol": "wget",
-        "repository": repository,
-        "dataset_id": dataset,
-        "duration_sec": round(last_duration, 2),
-        "file_size_bytes": int(last_size),
-        "average_speed_mbps": round(last_speed, 2),
-        "cpu_usage_percent": last_sys_avgs.get("cpu_usage_percent", 0.0),
-        "memory_usage_mb": last_sys_avgs.get("memory_usage_mb", 0.0),
-        "status": "success" if last_size > 0 and md5_last else "fail",
-        "checksum_md5": md5_last or "",
-        "checksum_sha256": sha256_last or "",
-        "expected_checksum_md5": expected_md5,
-        "checksum_match": checksum_match,
-        "write_speed_mbps": baseline_local.get("write_speed_mbps"),
-        "network_latency_ms": net_latency,
-        "packet_loss_percent": packet_loss,
-        "network_path": net_path,
-        "tool_version": _wget_version() or "wget",
-        "notes": note or None,
-        "error_message": None,
-    }
+    checksum_valid = bool(md5_last) and (
+        expected_md5 is None or md5_last == expected_md5
+    )
 
-    print("\n🧾 Result (schema v1.2 fields subset):")
-    print(json.dumps(result, indent=2))
+    status = cast(
+        Literal["success", "fail", "partial"],
+        "success" if last_size > 0 and checksum_valid else "fail",
+    )
+
+    if not md5_last:
+        raise SystemExit(
+            "❌ Cannot build BenchmarkResult: checksum_md5 is required by schema."
+        )
+
+    result_obj = BenchmarkResult(
+        timestamp=start_iso,
+        site=site,
+        protocol="wget",
+        repository=repository,
+        dataset_id=dataset,
+        duration_sec=round(last_duration, 2),
+        file_size_bytes=int(last_size),
+        average_speed_mbps=round(last_speed, 2),
+        cpu_usage_percent=last_sys_avgs.get("cpu_usage_percent", 0.0),
+        memory_usage_mb=last_sys_avgs.get("memory_usage_mb", 0.0),
+        status=status,
+        checksum_md5=md5_last,
+        checksum_sha256=sha256_last or None,
+        write_speed_mbps=write_speed,
+        network_latency_ms=net_latency,
+        packet_loss_percent=packet_loss,
+        network_path=net_path,
+        tool_version=_wget_version() or "wget",
+        notes=note,
+        error_message=None if status == "success" else "Checksum mismatch",
+    )
+
+    result = result_obj.dict(exclude_none=True)
+
+    print("\n🧾 Result:")
+    print(result_obj.json(indent=2, exclude_none=True))
 
     if no_submit:
         print("\n⏭️  Skipping submission (--no-submit)")

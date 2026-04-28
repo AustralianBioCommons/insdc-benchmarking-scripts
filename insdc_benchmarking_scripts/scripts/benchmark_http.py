@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import statistics
@@ -456,10 +457,13 @@ def main(
         error_message=None if status == "success" else "Checksum mismatch",
     )
 
-    result = result_obj.dict(exclude_none=True)
+    try:
+        result = result_obj.model_dump(exclude_none=True)
+    except AttributeError:
+        result = result_obj.dict(exclude_none=True)
 
     print("\n🧾 Result:")
-    print(result_obj.json(indent=2, exclude_none=True))
+    print(json.dumps(result, indent=2))
 
     if no_submit:
         print("\n⏭️  Skipping submission (--no-submit)")

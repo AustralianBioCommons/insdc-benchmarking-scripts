@@ -460,7 +460,7 @@ def main(
     try:
         result = result_obj.model_dump(exclude_none=True)
     except AttributeError:
-        result = result_obj.dict(exclude_none=True)
+        result = result_obj.model_dump(exclude_none=True)
 
     print("\n🧾 Result:")
     print(json.dumps(result, indent=2))
